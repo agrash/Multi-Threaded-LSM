@@ -1,0 +1,11 @@
+# Build artifacts
+my_program
+*.o
+*.out
+
+# SSTable data
+Tables/
+wal.log
+
+# macOS
+.DS_Store
