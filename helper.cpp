@@ -67,6 +67,48 @@ namespace lsm {
 		return true;
 	}
 
+
+	// This function is not going to check whether you are checking out of bounds or not.
+	uint64_t decode(char* data, uint64_t offset, bool& is_tombstone, std::string& key, std::string& val) {
+
+		uint64_t bytes_read = 0;
+
+		auto helper = [data](std::string& buffer, uint64_t offset) {
+			uint32_t length;
+			memcpy(&length, data + offset, sizeof(uint32_t));
+			offset += sizeof(uint32_t);
+
+			if (length > buffer.size()) {
+				buffer.append(length - buffer.size(), '\0');
+			}
+			memcpy(buffer.data(), data + offset, length);
+			buffer.resize(length);
+
+			return sizeof(uint32_t) + length;
+		};
+
+		uint8_t tombstone;
+		memcpy(&tombstone, data + offset, sizeof(uint8_t));
+		//std::cout<<(int)tombstone<<std::endl;
+
+		bytes_read += 1;
+
+		bytes_read += helper(key, offset + bytes_read);
+		if (tombstone == 0) {
+			is_tombstone = false;
+			//uint32_t val_len;
+		    //memcpy(&val_len, data + offset + bytes_read, sizeof(uint32_t));
+		    //std::cout << "val_len=" << val_len << std::endl;
+			bytes_read += helper(val, offset + bytes_read);
+
+		}
+		else {
+			is_tombstone = true;
+		}
+
+		return bytes_read;
+	}
+
 	std::pair<uint32_t, uint32_t> getHashes(const std::string& key) {
 		uint32_t h1, h2; 
 		MurmurHash3_x86_32(key.data(), key.size(), 0, &h1);

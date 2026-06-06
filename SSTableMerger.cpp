@@ -41,7 +41,7 @@ namespace lsm {
 	SSTableMerger::SSTableMerger(bool remove_tombstones, const std::vector<std::string>& filepaths, const std::string& merged_file_path, BloomFilter& filter) : remove_tombstones(remove_tombstones), merged_file(merged_file_path, filter) {
 
 		for (size_t i=0; i<filepaths.size(); ++i) {
-			iterators.emplace_back(make_unique<SSTableIterator>(filepaths[i]));
+			iterators.emplace_back(std::make_unique<SSTableIterator>(filepaths[i]));
 		}
 
 		merge();

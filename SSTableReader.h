@@ -1,17 +1,20 @@
 #pragma once
 #include <iostream>
 #include <filesystem>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <algorithm>
 #include "helper.h"
 
 namespace lsm {
 
 	class SSTableReader {
 	private:
-		std::ifstream file;
+		int fd;
 		std::string filepath;
 
 		uint64_t index_offset;
-		std::streampos index_start;
 
 		std::vector<Bookmark> index;
 
@@ -19,7 +22,7 @@ namespace lsm {
 		SSTableReader(const std::string& filepath);
 
 		~SSTableReader();
-		std::optional<std::string> findKey(const std::string& key);
+		std::optional<std::string> findKey(const std::string& key, std::vector<char>& buffer);
 
 		std::string getFilePath();
 	};

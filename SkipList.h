@@ -14,7 +14,7 @@ namespace lsm {
 
 			std::vector<Node*> next;
 
-			Node(const std::string& key, const std::string& val, size_t levels) : is_tombstone(false), key(key), val(val), next(levels + 1, nullptr) {}
+			Node(std::string& key, std::string& val, size_t levels) : is_tombstone(false), key(std::move(key)), val(std::move(val)), next(levels + 1, nullptr) {}
 			size_t getSizeBytes() const;
 			bool isTombstone() const;
 		};
@@ -34,7 +34,7 @@ namespace lsm {
 
 		size_t getEntrySize(const Node* curr) const;
 
-		void insertHelper(bool insert_tombstone, const std::string& val, Node* curr);
+		void insertHelper(bool insert_tombstone, std::string& val, Node* curr);
 
 	public:
 		SkipList();
@@ -59,7 +59,7 @@ namespace lsm {
 		iterator end() const;
 
 		iterator search(const std::string& key) const;
-		void insert(bool insert_tombstone, const std::string& key, const std::string& val);
+		void insert(bool insert_tombstone, std::string& key, std::string& val);
 
 		size_t getSizeBytes() const;
 

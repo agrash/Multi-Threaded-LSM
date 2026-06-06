@@ -5,6 +5,10 @@ namespace lsm {
 	DB::DB() : wal_log("wal.log"), filters_at_level(MAX_LEVEL + 1), readers_at_level(MAX_LEVEL + 1), reader_level_locks(MAX_LEVEL + 1), filter_level_locks(MAX_LEVEL + 1) {
 		compactor_thread = std::thread(&DB::compactor, this);
 		flush_thread = std::thread(&DB::memtableFlush, this);
+
+		writer_thread = std::thread(&DB::writer, this);
+
+		for (auto& thread : reader_threads) thread = std::thread(&DB::reader, this);
 	}
 
 	DB::~DB() {
@@ -15,8 +19,6 @@ namespace lsm {
 			flush_thread.join();
 		}
 
-		std::cout<<"Stopped Flusher"<<std::endl;
-		
 		run_compactor.store(false, std::memory_order_relaxed);
 		start_compactor.release();
 
@@ -24,28 +26,17 @@ namespace lsm {
 			compactor_thread.join();
 		}
 
-		std::cout<<"Stopped Compactor"<<std::endl;
-	}
+		run_writer.store(false, std::memory_order_relaxed);
+		run_readers.store(false, std::memory_order_relaxed);
 
-	void DB::checkAndHandleFlush() {
-		{
-			//Don't need active lock as only this thread can change the value of active.
-			if (memtable[active].getSizeBytes() >= FLUSH_TRIGGER) {
-				if (inactive_flushing.load(std::memory_order_acquire)) {
-					std::cout<<"Writer Thread is Paused"<<std::endl;
-					writer_waiting.store(true, std::memory_order_release);
-					resume_writes.acquire();
-				}
+		writer_buffer.stop(1);
+		reader_buffer.stop(NUM_READER_THREADS);
 
-				{
-					std::unique_lock<std::shared_mutex> lock(active_lock);
-					active = 1 - active;
-					inactive_flushing.store(true, std::memory_order_release);
-				}
-
-				start_flush.release();
-			}
+		if (writer_thread.joinable()) writer_thread.join();
+		for (auto& thread : reader_threads) {
+		    if (thread.joinable()) thread.join();
 		}
+
 	}
 
 	void DB::memtableFlush() {
@@ -57,21 +48,20 @@ namespace lsm {
 
 			std::cout<<"Trigerring Flush!"<<std::endl;
 
-			BloomFilter new_filter(bloom_filter_size, num_hashes);
+			auto new_filter = std::make_unique<BloomFilter>(bloom_filter_size, num_hashes);
 
 			const std::string flush_name = prefix + "0_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db";
 
-			SSTableBuilder builder(flush_name, new_filter);
+			SSTableBuilder builder(flush_name, *new_filter);
 			builder.flush(memtable[1 - active]); 
 
 			{
 				std::unique_lock<std::shared_mutex> lock1(reader_level_locks[0]);
 				std::unique_lock<std::shared_mutex> lock2(filter_level_locks[0]);
-				readers_at_level[0].emplace_back(make_unique<SSTableReader>(flush_name));
+				readers_at_level[0].emplace_back(std::make_unique<SSTableReader>(flush_name));
 				filters_at_level[0].emplace_back(std::move(new_filter));
 			}
 
-			wal_log.clear();
 
 			{
 				std::unique_lock<std::shared_mutex> lock(inactive_memtable_lock);
@@ -91,6 +81,8 @@ namespace lsm {
 				if (readers_at_level[0].size() >= COMPACTION_TRIGGER) { start_compactor.release(); }
 			}
 		}
+
+		std::cout<<"Stopped Flusher"<<std::endl;
 
 	}
 
@@ -125,16 +117,16 @@ namespace lsm {
 
 				bool remove_tombstones = (curr_level == curr_max_level);
 
-				BloomFilter new_filter(filter_size, num_hashes);
+				auto new_filter = std::make_unique<BloomFilter>(bloom_filter_size, num_hashes);
 
 				const std::string merged_file_path = prefix + std::to_string(curr_level + 1) + "_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db"; // This line is safe to run without a lock.
 
-				SSTableMerger merge(remove_tombstones, file_paths, merged_file_path, new_filter); //Don't need locks for this. (Only compactor adds or remove bloom filters and the files are only made irrelevant by compactor.)	
+				SSTableMerger merge(remove_tombstones, file_paths, merged_file_path, *new_filter); //Don't need locks for this. (Only compactor adds or remove bloom filters and the files are only made irrelevant by compactor.)	
 
 				{
 					std::unique_lock<std::shared_mutex> lock1(reader_level_locks[curr_level + 1]);
 					std::unique_lock<std::shared_mutex> lock2(filter_level_locks[curr_level + 1]);
-					readers_at_level[curr_level + 1].emplace_back(make_unique<SSTableReader>(merged_file_path));
+					readers_at_level[curr_level + 1].emplace_back(std::make_unique<SSTableReader>(merged_file_path));
 					filters_at_level[curr_level + 1].emplace_back(std::move(new_filter));
 				}
 
@@ -157,14 +149,121 @@ namespace lsm {
 
 				std::cout<<"Finished Compaction"<<std::endl;
 			}
+
+		}
+
+		std::cout<<"Stopped Compactor"<<std::endl;
+	}
+
+
+
+	void DB::writer() {
+		while (run_writer.load(std::memory_order_relaxed)) {
+			auto job = writer_buffer.consume();
+
+			if (!run_writer.load(std::memory_order_relaxed)) break;
+
+			auto& container = job.data;
+
+			insert(container.key, container.val, container.is_tombstone);
+
+			// next line does not need lock because there is a single writer.
+			if (job.sequence_number > highest_write_completed.load(std::memory_order_relaxed)) {
+				highest_write_completed.store(job.sequence_number, std::memory_order_relaxed);
+				highest_write_completed.notify_all();
+			}
+		}
+
+		std::cout<<"Stopped Writer"<<std::endl;
+	}
+
+	void DB::reader() {
+		while (run_readers.load(std::memory_order_relaxed)) {
+			auto job = reader_buffer.consume();
+
+			if (!run_readers.load(std::memory_order_relaxed)) break;
+
+			auto current_highest_write = highest_write_completed.load(std::memory_order_relaxed);
+
+			while (current_highest_write < job.highest_write) {
+
+				highest_write_completed.wait(current_highest_write, std::memory_order_relaxed);
+				current_highest_write = highest_write_completed.load(std::memory_order_relaxed);
+
+			}
+
+			std::vector<char> buffer;
+			*job.result_container = search(job.key, buffer);
+			job.signal_done->release();
+
+		}
+
+		std::cout<<"Stopped a Reader"<<std::endl;
+	}
+
+	void DB::checkAndHandleFlush() {
+		{
+			//Don't need active lock as only this thread can change the value of active.
+			if (memtable[active].getSizeBytes() >= FLUSH_TRIGGER) {
+				if (inactive_flushing.load(std::memory_order_acquire)) {
+					std::cout<<"Writer Thread is Paused"<<std::endl;
+					writer_waiting.store(true, std::memory_order_release);
+					resume_writes.acquire();
+				}
+
+				{
+					std::unique_lock<std::shared_mutex> lock(active_lock);
+					active = 1 - active;
+					inactive_flushing.store(true, std::memory_order_release);
+				}
+
+				start_flush.release();
+				wal_log.clear(); // This is not how WAL should work but am leaving it like this for now.
+			}
 		}
 	}
 
+
 	void DB::put(const std::string& key, const std::string& val, bool tombstone) {
+		writeBufferElem job{ dataContainer(key, val, tombstone), 0 };
+
+		{
+			std::unique_lock<std::shared_mutex> lock(highest_write_lock);
+			highest_write_received = sequence_counter++;
+			job.sequence_number = highest_write_received;
+		}
+
+		writer_buffer.produce(job);
+	}
+
+	void DB::remove(const std::string& key) {
+		put(key, "", true);
+	}
+
+	std::optional<std::string> DB::get(const std::string& key, std::vector<char>& buffer) {
+		return search(key, buffer);
+		/*std::optional<std::string> result;
+		std::binary_semaphore signal_done{0};
+
+		readBufferElem job{key, &result, &signal_done, 0};
+
+		{
+			std::shared_lock<std::shared_mutex> lock(highest_write_lock);
+			job.highest_write = highest_write_received;
+		}
+
+		reader_buffer.produce(job);
+
+		signal_done.acquire();
+
+		return result;*/
+	}
+
+	void DB::insert(std::string& key, std::string& val, bool tombstone) {
 		wal_log.append(tombstone, key, val);
 
 		{
-			std::shared_lock<std::shared_mutex> lock1(active_lock);
+			std::shared_lock<std::shared_mutex> lock1(active_lock); // Can probably remove this lock.
 			std::unique_lock<std::shared_mutex> lock2(active_memtable_lock);
 			memtable[active].insert(tombstone, key, val);
 		}
@@ -172,17 +271,13 @@ namespace lsm {
 		checkAndHandleFlush();
 	}
 
-	void DB::remove(const std::string& key) {
-		put(key, "", true);
-	}
-
 	extern std::pair<uint32_t, uint32_t> getHashes(const std::string& key);
 
 	std::optional<std::string> DB::searchInMemtable(const std::string& key) {
-		std::shared_lock<std::shared_mutex> lock1(active_lock);
+		//std::shared_lock<std::shared_mutex> lock1(active_lock);
 
 		{
-			std::shared_lock<std::shared_mutex> lock2(active_memtable_lock);
+			//std::shared_lock<std::shared_mutex> lock2(active_memtable_lock);
 			auto it = memtable[active].search(key);
 			if (it != memtable[active].end()) {
 				if (it->is_tombstone) {return "";}
@@ -191,7 +286,7 @@ namespace lsm {
 		}
 
 		{
-			std::shared_lock<std::shared_mutex> lock2(inactive_memtable_lock);
+			//std::shared_lock<std::shared_mutex> lock2(inactive_memtable_lock);
 			auto it = memtable[1-active].search(key);
 			if (it != memtable[1-active].end()) {
 				if (it->is_tombstone) {return "";}
@@ -202,27 +297,30 @@ namespace lsm {
 		return std::nullopt;
 	}
 
-	std::optional<std::string> DB::get(const std::string& key) {
+	std::optional<std::string> DB::search(const std::string& key, std::vector<char>& buffer) {
 		auto memtable_result = searchInMemtable(key);
 		if (memtable_result) { return memtable_result; }
+
+		//std::cout<<"Not in memtable"<<std::endl;
 
 		auto [h1, h2] = getHashes(key);
 
 		for (size_t level = 0; level <= MAX_LEVEL; ++level) {
 
-			std::shared_lock<std::shared_mutex> lock1(reader_level_locks[level]);
-			std::shared_lock<std::shared_mutex> lock2(filter_level_locks[level]);
+			//std::shared_lock<std::shared_mutex> lock1(reader_level_locks[level]);
+			//std::shared_lock<std::shared_mutex> lock2(filter_level_locks[level]);
 
 			for (int i = (int)readers_at_level[level].size() - 1; i>=0; --i) {
-				if (!filters_at_level[level][i].contains(h1, h2)) {continue;}
+				if (!filters_at_level[level][i]->contains(h1, h2)) {continue;}
 
-				auto res = readers_at_level[level][i]->findKey(key);
+				auto res = readers_at_level[level][i]->findKey(key, buffer);
 				if (res) {return res;}
 			}
 		}
 
 		return std::nullopt;
 	}
+
 
 	void DB::recover() {
 		std::shared_lock<std::shared_mutex> lock1(active_lock);

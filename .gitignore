@@ -2,6 +2,7 @@
 my_program
 *.o
 *.out
+*.dSYM/
 
 # SSTable data
 Tables/

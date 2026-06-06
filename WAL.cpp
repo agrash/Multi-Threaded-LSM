@@ -36,8 +36,10 @@ namespace lsm {
 		bool is_tombstone;
 		std::string key, val;
 
+		std::string dummy = "";
+
 		while (decode(infile, is_tombstone, key, val)) {
-			if (is_tombstone) {memtable.insert(true, key, {});}
+			if (is_tombstone) {memtable.insert(true, key, dummy);}
 			else {memtable.insert(false, key, val);}
 		}
 

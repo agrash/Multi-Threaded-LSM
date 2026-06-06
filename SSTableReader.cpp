@@ -4,76 +4,86 @@ namespace lsm {
 
 
 	SSTableReader::~SSTableReader() {
-		file.close();
+		close(fd);
 
 		std::filesystem::remove(filepath);
 	}
 
 	SSTableReader::SSTableReader(const std::string& filepath) : filepath(filepath) {
-		file.open(filepath.c_str(), std::ios::in | std::ios::binary);
-		if (!file.is_open()) {
+		fd = open(filepath.c_str(), O_RDONLY);
+		if (fd == -1) {
 			throw std::runtime_error("Unable to open file " + filepath);
 		}
 
-		file.seekg(-(int)sizeof(uint64_t), std::ios::end);
+		struct stat file_stat;
+		if (fstat(fd, &file_stat) == -1) {
+			throw std::runtime_error("Unable to get file stats" + filepath);
+		}
 
-		std::streampos offset_start = file.tellg();
+		uint64_t offset_start = file_stat.st_size - sizeof(uint64_t);
+		pread(fd, reinterpret_cast<char*> (&index_offset), sizeof(uint64_t), offset_start);
 
-		file.read(reinterpret_cast<char*> (&index_offset), sizeof(uint64_t));
+		uint64_t index_size = offset_start - index_offset;
 
-		file.seekg(index_offset);
-		index_start = file.tellg();
+		char buffer[index_size];
+		pread(fd, buffer, index_size, index_offset);
 
-		std::streampos curr = index_start;
+		uint64_t curr = 0;
 
-		while (curr < offset_start) {
+		while (curr < index_size) {
 			uint32_t key_length;
-			file.read(reinterpret_cast<char*> (&key_length), sizeof(uint32_t));
+			memcpy(&key_length, buffer + curr, sizeof(uint32_t));
+
+			curr += sizeof(uint32_t);
 
 			std::string key(key_length, '\0');
-			file.read(key.data(), key_length);
+			memcpy(key.data(), buffer + curr, key_length);
+			curr += key_length;
 
 			uint64_t offset;
-			file.read(reinterpret_cast<char*> (&offset), sizeof(uint64_t));
+			memcpy(&offset, buffer + curr, sizeof(uint64_t));
+			curr += sizeof(uint64_t);
 
-			curr += sizeof(uint32_t) + key_length + sizeof(uint64_t);
 			index.emplace_back(std::move(key), offset);
 		}
 	}
 
-	extern bool decode(std::ifstream& infile, bool& is_tombstone, std::string& key, std::string& val);
+	extern uint64_t decode(char* data, uint64_t offset, bool& is_tombstone, std::string& key, std::string& val);
 
-	std::optional<std::string> SSTableReader::findKey(const std::string& key) {
+	std::optional<std::string> SSTableReader::findKey(const std::string& key, std::vector<char>& buffer) {
 
 		Bookmark dummy(key, 0);
 		int idx = upper_bound(index.begin(), index.end(), dummy) - index.begin() - 1;
 		if (idx < 0) {
-			return "";
+			return std::nullopt;
 		}
 
-		file.seekg(index[idx].offset);
 
-		std::streampos curr = file.tellg();
-		std::streampos end  = (idx != index.size() - 1) ? static_cast<std::streampos>(index[idx + 1].offset) : index_start;
+		uint64_t start = index[idx].offset;
+		uint64_t end  = (idx != index.size() - 1) ? index[idx + 1].offset : index_offset;
+
+		uint64_t block_size = end - start;
+
+		if (buffer.size() < block_size) buffer.resize(block_size);
+
+		pread(fd, buffer.data(), block_size, start);
+
+		uint64_t curr = 0;
 
 		bool is_tombstone;
 		std::string saved_key, saved_val;
-		while (curr < end) {	
+		while (curr < block_size) {	
 
-			decode(file, is_tombstone, saved_key, saved_val);
+			curr += decode(buffer.data(), curr, is_tombstone, saved_key, saved_val);
 
 			auto cmp_result = saved_key <=> key;
 			if (cmp_result == 0) {
+				//std::cout<<"Key Found"<<std::endl;
 				if (is_tombstone) {return "";}
 				else {return saved_val;}
 			}
 			else if (cmp_result > 0) {
 				return std::nullopt;
-			}
-
-			curr += sizeof(uint8_t) + sizeof(uint32_t) + saved_key.size();
-			if (!is_tombstone) {
-				curr += sizeof(uint32_t) + saved_val.size();
 			}
 		}
 

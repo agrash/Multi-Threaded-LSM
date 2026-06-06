@@ -2,15 +2,9 @@
 #include "helper.h"
 #include "SSTableBuilder.h"
 
+#include <memory>
+
 namespace lsm {
-
-	struct dataContainer {
-		bool is_tombstone;
-		std::string key;
-		std::string val;
-
-		dataContainer() {}
-	};
 
 	class SSTableIterator {
 	private:

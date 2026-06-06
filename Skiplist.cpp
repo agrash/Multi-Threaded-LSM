@@ -38,7 +38,9 @@ namespace lsm {
     //End iterator functions.
 
     SkipList::SkipList() : gen(std::random_device{}()), dist(PROBABILITY) {
-		header = new Node({}, {}, MAX_LVL);
+    	std::string dummy_key = "";
+    	std::string dummy_val = "";
+		header = new Node(dummy_key, dummy_val, MAX_LVL);
 
 		byte_counter = sizeof(SkipList) + getEntrySize(header);
 	}
@@ -102,7 +104,7 @@ namespace lsm {
 		return end();
 	}
 
-	void SkipList::insert(bool insert_tombstone, const std::string& key, const std::string& val) {
+	void SkipList::insert(bool insert_tombstone, std::string& key, std::string& val) {
 		auto predecessors = getPredecessors(key);
 		Node* next = predecessors[0]->next[0];
 
@@ -115,7 +117,7 @@ namespace lsm {
 			size_t max_level = calcNodeLevel();
 			Node* to_add = new Node(key, val, max_level);
 
-			insertHelper(insert_tombstone, val, to_add);
+			if (insert_tombstone) to_add->val = "";
 
 			byte_counter += getEntrySize(to_add);
 
@@ -127,13 +129,13 @@ namespace lsm {
 		}
 	}
 
-	void SkipList::insertHelper(bool insert_tombstone, const std::string& val, Node* curr) {
+	void SkipList::insertHelper(bool insert_tombstone, std::string& val, Node* curr) {
 		if (insert_tombstone) {
-			curr->val = {};
+			curr->val = "";
 			curr->is_tombstone = true;
 		}
 		else {
-			curr->val = val;
+			curr->val = std::move(val);
 			curr->is_tombstone = false;
 		}
 	}
