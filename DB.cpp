@@ -8,7 +8,7 @@ namespace lsm {
 
 		writer_thread = std::thread(&DB::writer, this);
 
-		//for (auto& thread : reader_threads) thread = std::thread(&DB::reader, this);
+		for (auto& thread : reader_threads) thread = std::thread(&DB::reader, this);
 	}
 
 	DB::~DB() {
@@ -30,12 +30,12 @@ namespace lsm {
 		run_readers.store(false, std::memory_order_relaxed);
 
 		writer_buffer.stop(1);
-		//reader_buffer.stop(NUM_READER_THREADS);
+		reader_buffer.stop(NUM_READER_THREADS);
 
 		if (writer_thread.joinable()) writer_thread.join();
-		/*for (auto& thread : reader_threads) {
+		for (auto& thread : reader_threads) {
 		    if (thread.joinable()) thread.join();
-		}*/
+		}
 
 	}
 
@@ -176,6 +176,7 @@ namespace lsm {
 	}
 
 	void DB::reader() {
+		std::vector<char> buffer(100 * 100);
 		while (run_readers.load(std::memory_order_relaxed)) {
 			auto job = reader_buffer.consume();
 
@@ -190,8 +191,7 @@ namespace lsm {
 
 			}
 
-			std::vector<char> buffer;
-			*job.result_container = search(job.key, buffer);
+			*job.result_container = search(job.key, buffer); // NRVO should trigger, so don't need to move here.
 			job.signal_done->release();
 
 		}
@@ -239,8 +239,8 @@ namespace lsm {
 	}
 
 	std::optional<std::string> DB::get(const std::string& key, std::vector<char>& buffer) {
-		return search(key, buffer);
-		/*std::optional<std::string> result;
+
+		std::optional<std::string> result;
 		std::binary_semaphore signal_done{0};
 
 		readBufferElem job{key, &result, &signal_done, 0};
@@ -254,7 +254,7 @@ namespace lsm {
 
 		signal_done.acquire();
 
-		return result;*/
+		return result;
 	}
 
 	void DB::insert(std::string& key, std::string& val, bool tombstone) {

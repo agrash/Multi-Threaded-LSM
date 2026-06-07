@@ -60,6 +60,8 @@ namespace lsm {
 		RingBuffer<writeBufferElem, RING_BUFFER_SIZE> writer_buffer;
 		RingBuffer<readBufferElem, RING_BUFFER_SIZE> reader_buffer; 
 
+		uint64_t sequence_counter = 0;
+		std::atomic<uint64_t> highest_write_completed{0};
 
 		static constexpr size_t FLUSH_TRIGGER = 4 * 1024 * 1024;
 		static constexpr size_t bloom_filter_size = FLUSH_TRIGGER / (16);  // Keep this a power of 2, if want to change it then need to change the mod logic in bloom filter.
@@ -114,9 +116,6 @@ namespace lsm {
 	public:
 		DB();
 		~DB();
-
-		uint64_t sequence_counter = 0;
-		std::atomic<uint64_t> highest_write_completed{0};
 
 		void put(const std::string& key, const std::string& val, bool tombstone = false);
 		void remove(const std::string& key);

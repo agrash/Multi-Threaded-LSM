@@ -111,7 +111,7 @@ int main() {
 	start = std::chrono::high_resolution_clock::now();
 	
 	size_t st = 0;
-	int num_threads = 10;
+	int num_threads = 20;
 	size_t e = key_val.size() / num_threads;
 	std::vector<std::thread> threads;
 	for (int i=0; i<num_threads; ++i) {
