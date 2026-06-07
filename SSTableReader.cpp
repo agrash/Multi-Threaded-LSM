@@ -25,27 +25,29 @@ namespace lsm {
 
 		uint64_t index_size = offset_start - index_offset;
 
-		char buffer[index_size];
-		pread(fd, buffer, index_size, index_offset);
+		std::vector<char> buffer(index_size);
+		pread(fd, buffer.data(), index_size, index_offset);
 
 		uint64_t curr = 0;
 
 		while (curr < index_size) {
 			uint32_t key_length;
-			memcpy(&key_length, buffer + curr, sizeof(uint32_t));
+			memcpy(&key_length, buffer.data() + curr, sizeof(uint32_t));
 
 			curr += sizeof(uint32_t);
 
 			std::string key(key_length, '\0');
-			memcpy(key.data(), buffer + curr, key_length);
+			memcpy(key.data(), buffer.data() + curr, key_length);
 			curr += key_length;
 
 			uint64_t offset;
-			memcpy(&offset, buffer + curr, sizeof(uint64_t));
+			memcpy(&offset, buffer.data() + curr, sizeof(uint64_t));
 			curr += sizeof(uint64_t);
 
 			index.emplace_back(std::move(key), offset);
 		}
+
+		fsync(fd);
 	}
 
 	extern uint64_t decode(char* data, uint64_t offset, bool& is_tombstone, std::string& key, std::string& val);

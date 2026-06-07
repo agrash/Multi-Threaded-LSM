@@ -8,7 +8,7 @@ namespace lsm {
 
 		writer_thread = std::thread(&DB::writer, this);
 
-		for (auto& thread : reader_threads) thread = std::thread(&DB::reader, this);
+		//for (auto& thread : reader_threads) thread = std::thread(&DB::reader, this);
 	}
 
 	DB::~DB() {
@@ -30,12 +30,12 @@ namespace lsm {
 		run_readers.store(false, std::memory_order_relaxed);
 
 		writer_buffer.stop(1);
-		reader_buffer.stop(NUM_READER_THREADS);
+		//reader_buffer.stop(NUM_READER_THREADS);
 
 		if (writer_thread.joinable()) writer_thread.join();
-		for (auto& thread : reader_threads) {
+		/*for (auto& thread : reader_threads) {
 		    if (thread.joinable()) thread.join();
-		}
+		}*/
 
 	}
 
@@ -167,11 +167,9 @@ namespace lsm {
 
 			insert(container.key, container.val, container.is_tombstone);
 
-			// next line does not need lock because there is a single writer.
-			if (job.sequence_number > highest_write_completed.load(std::memory_order_relaxed)) {
-				highest_write_completed.store(job.sequence_number, std::memory_order_relaxed);
-				highest_write_completed.notify_all();
-			}
+			// sequence number of jobs completed by writer always increases.
+			highest_write_completed.store(job.sequence_number, std::memory_order_relaxed);
+			highest_write_completed.notify_all();
 		}
 
 		std::cout<<"Stopped Writer"<<std::endl;
@@ -274,10 +272,10 @@ namespace lsm {
 	extern std::pair<uint32_t, uint32_t> getHashes(const std::string& key);
 
 	std::optional<std::string> DB::searchInMemtable(const std::string& key) {
-		//std::shared_lock<std::shared_mutex> lock1(active_lock);
+		std::shared_lock<std::shared_mutex> lock1(active_lock);
 
 		{
-			//std::shared_lock<std::shared_mutex> lock2(active_memtable_lock);
+			std::shared_lock<std::shared_mutex> lock2(active_memtable_lock);
 			auto it = memtable[active].search(key);
 			if (it != memtable[active].end()) {
 				if (it->is_tombstone) {return "";}
@@ -286,7 +284,7 @@ namespace lsm {
 		}
 
 		{
-			//std::shared_lock<std::shared_mutex> lock2(inactive_memtable_lock);
+			std::shared_lock<std::shared_mutex> lock2(inactive_memtable_lock);
 			auto it = memtable[1-active].search(key);
 			if (it != memtable[1-active].end()) {
 				if (it->is_tombstone) {return "";}
@@ -307,8 +305,8 @@ namespace lsm {
 
 		for (size_t level = 0; level <= MAX_LEVEL; ++level) {
 
-			//std::shared_lock<std::shared_mutex> lock1(reader_level_locks[level]);
-			//std::shared_lock<std::shared_mutex> lock2(filter_level_locks[level]);
+			std::shared_lock<std::shared_mutex> lock1(reader_level_locks[level]);
+			std::shared_lock<std::shared_mutex> lock2(filter_level_locks[level]);
 
 			for (int i = (int)readers_at_level[level].size() - 1; i>=0; --i) {
 				if (!filters_at_level[level][i]->contains(h1, h2)) {continue;}

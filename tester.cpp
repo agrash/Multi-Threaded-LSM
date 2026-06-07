@@ -5,7 +5,7 @@
 #include <ctime>
 #include <algorithm>
 #include <stdexcept>
-#include <omp.h>
+//#include <omp.h>
 #include <unordered_map>
 #include <atomic>
 #include "DB.h"
@@ -74,7 +74,7 @@ int main() {
 
 	auto start = std::chrono::high_resolution_clock::now();
 
-	#pragma omp parallel for num_threads(4)
+	//#pragma omp parallel for num_threads(4)
 	for (const auto& [key, val] : write_data) {
 		database.put(key, val);
 	}
@@ -85,7 +85,7 @@ int main() {
 	);
 	cout<<"Writing duration: "<<duration.count()<<endl;
 
-	/*for (auto it = m.begin(); it != m.end(); ) {
+	for (auto it = m.begin(); it != m.end(); ) {
 		bool d = dist(length_gen) <= 5;
 
 		if (d) {
@@ -95,7 +95,7 @@ int main() {
 		else {
 			++it;
 		}
-	}*/
+	}
 
 	vector<pair<string, string>> key_val;
 	for (auto& [key, val] : m) {
@@ -104,10 +104,9 @@ int main() {
 
 	shuffle(key_val.begin(), key_val.end(), length_gen);
 
-	std::this_thread::sleep_for(std::chrono::seconds(20));
+	//std::this_thread::sleep_for(std::chrono::seconds(20));
 
 	cout<<"Phase 1 done"<<endl;
-	atomic<int> counter = 0;
 
 	start = std::chrono::high_resolution_clock::now();
 	
@@ -127,16 +126,17 @@ int main() {
 	duration = std::chrono::duration_cast<std::chrono::milliseconds>(
 	    end - start
 	);
-	cout<<counter<<endl;
 
 	cout<<"Phase 2 done"<<endl;
 
 	cout<<"Read duration: "<<duration.count()<<endl;
 
-	/*for (int i=0; i<limit / 100; ++i) {
+	/*vector<char> buffer(100 * 100);
+
+	for (int i=0; i<limit / 100; ++i) {
 		string key = s.generate(dist(length_gen));
 
-		auto res = database.get(key);
+		auto res = database.get(key, buffer);
 		auto it = m.find(key);
 
 		if ((res != std::nullopt && *res != "") ^ (it != m.end())) {

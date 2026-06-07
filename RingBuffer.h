@@ -53,7 +53,7 @@ public:
 		stop_buffer.store(true, std::memory_order_release);
 
 		for (int i=0; i<n; ++i)
-		empty_slots.release();
+		full_slots.release();
 	}
 
 };
