@@ -68,10 +68,10 @@ namespace lsm {
 				memtable[1 - active].clear(); 
 			}
 
-			//checked here that order is not important there won't be a deadlock.
-			inactive_flushing.store(false, std::memory_order_release);
-			if (writer_waiting.exchange(false, std::memory_order_acquire)) {
-				resume_writes.release();
+			{
+				std::unique_lock<std::mutex> lock(writer_flusher);
+				inactive_flushing = false;
+				if (writer_waiting) resume_writes.release();
 			}
 
 			std::cout<<"Finished Flush!"<<std::endl;
@@ -117,7 +117,7 @@ namespace lsm {
 
 				bool remove_tombstones = (curr_level == curr_max_level);
 
-				auto new_filter = std::make_unique<BloomFilter>(bloom_filter_size, num_hashes);
+				auto new_filter = std::make_unique<BloomFilter>(filter_size, num_hashes);
 
 				const std::string merged_file_path = prefix + std::to_string(curr_level + 1) + "_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db"; // This line is safe to run without a lock.
 
@@ -203,16 +203,23 @@ namespace lsm {
 		{
 			//Don't need active lock as only this thread can change the value of active.
 			if (memtable[active].getSizeBytes() >= FLUSH_TRIGGER) {
-				if (inactive_flushing.load(std::memory_order_acquire)) {
-					std::cout<<"Writer Thread is Paused"<<std::endl;
-					writer_waiting.store(true, std::memory_order_release);
-					resume_writes.acquire();
+
+				bool wait = false;
+				{
+				 	std::unique_lock<std::mutex> lock(writer_flusher);
+				 	if (inactive_flushing) {
+						std::cout<<"Writer Thread is Paused"<<std::endl;
+						writer_waiting = true;
+						wait = true;
+					}
 				}
+
+				if (wait) resume_writes.acquire();
 
 				{
 					std::unique_lock<std::shared_mutex> lock(active_lock);
 					active = 1 - active;
-					inactive_flushing.store(true, std::memory_order_release);
+					inactive_flushing = true; // no need for lock here as only one memtable is flushed at a time.
 				}
 
 				start_flush.release();
@@ -229,16 +236,16 @@ namespace lsm {
 			std::unique_lock<std::shared_mutex> lock(highest_write_lock);
 			highest_write_received = sequence_counter++;
 			job.sequence_number = highest_write_received;
+			writer_buffer.produce(job); // need to put in lock to maintain the property that writer takes job in increasing order of sequence number.
 		}
 
-		writer_buffer.produce(job);
 	}
 
 	void DB::remove(const std::string& key) {
 		put(key, "", true);
 	}
 
-	std::optional<std::string> DB::get(const std::string& key, std::vector<char>& buffer) {
+	std::optional<std::string> DB::get(const std::string& key) {
 
 		std::optional<std::string> result;
 		std::binary_semaphore signal_done{0};

@@ -5,14 +5,13 @@ namespace lsm {
 	using iterator = SkipList::iterator;
 
 	size_t SkipList::Node::getSizeBytes() const {
-		size_t footprint = sizeof(Node) + key.size() + val.size() + (next.size() * sizeof(Node*));
-		return footprint;
+		return key.size() + val.size();	// size of data accumulated in skiplist rather than the total size of skiplist makes more sense to use as a metric for when to flush.
 	};
 
 	bool SkipList::Node::isTombstone() const {
 		return is_tombstone;
 	}
-	//End Node functions.
+
 
 	std::string& iterator::operator*() {
 		return ptr->val;
@@ -42,7 +41,7 @@ namespace lsm {
     	std::string dummy_val = "";
 		header = new Node(dummy_key, dummy_val, MAX_LVL);
 
-		byte_counter = sizeof(SkipList) + getEntrySize(header);
+		byte_counter = 0;
 	}
 
 	SkipList::~SkipList() {
@@ -163,6 +162,5 @@ namespace lsm {
 		byte_counter = 0;
 	}
 
-	//End SkipList functions.
 
 }

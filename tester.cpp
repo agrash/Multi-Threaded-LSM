@@ -30,9 +30,8 @@ public:
 
 void check_databse(DB& database, const vector<pair<string, string>>& data, int start, int end) {
 	int count = 0;
-	vector<char> buffer(100 * 100);
 	for (int i=start; i<end; ++i) {
-		auto res = database.get(data[i].first, buffer);
+		auto res = database.get(data[i].first);
 	}
 }
 

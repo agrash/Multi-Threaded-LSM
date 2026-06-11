@@ -14,6 +14,7 @@ namespace lsm {
 
 			std::vector<Node*> next;
 
+			// have to change these references to value, and the caller would decide whether to pass them as r-value if they no longer want to keep the data associated with it.
 			Node(std::string& key, std::string& val, size_t levels) : is_tombstone(false), key(std::move(key)), val(std::move(val)), next(levels + 1, nullptr) {}
 			size_t getSizeBytes() const;
 			bool isTombstone() const;
@@ -59,6 +60,7 @@ namespace lsm {
 		iterator end() const;
 
 		iterator search(const std::string& key) const;
+		// same change needed as Node constructor.
 		void insert(bool insert_tombstone, std::string& key, std::string& val);
 
 		size_t getSizeBytes() const;

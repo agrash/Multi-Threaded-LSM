@@ -60,7 +60,7 @@ namespace lsm {
 		RingBuffer<writeBufferElem, RING_BUFFER_SIZE> writer_buffer;
 		RingBuffer<readBufferElem, RING_BUFFER_SIZE> reader_buffer; 
 
-		uint64_t sequence_counter = 0;
+		uint64_t sequence_counter = 1;
 		std::atomic<uint64_t> highest_write_completed{0};
 
 		static constexpr size_t FLUSH_TRIGGER = 4 * 1024 * 1024;
@@ -80,8 +80,9 @@ namespace lsm {
 		std::binary_semaphore start_flush{0};
 
 		std::binary_semaphore resume_writes{0};
-		std::atomic<bool> inactive_flushing{false};
-		std::atomic<bool> writer_waiting{false};
+		bool inactive_flushing{false};
+		bool writer_waiting{false};
+		std::mutex writer_flusher;
 
 		std::atomic<bool> run_writer{true};
 		std::thread writer_thread;
@@ -119,7 +120,7 @@ namespace lsm {
 
 		void put(const std::string& key, const std::string& val, bool tombstone = false);
 		void remove(const std::string& key);
-		std::optional<std::string> get(const std::string& key, std::vector<char>& buffer);
+		std::optional<std::string> get(const std::string& key);
 
 		void recover();
 	};
