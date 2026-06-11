@@ -71,7 +71,10 @@ namespace lsm {
 			{
 				std::unique_lock<std::mutex> lock(writer_flusher);
 				inactive_flushing = false;
-				if (writer_waiting) resume_writes.release();
+				if (writer_waiting) {
+					writer_waiting = false;
+					resume_writes.release();
+				}
 			}
 
 			std::cout<<"Finished Flush!"<<std::endl;
@@ -214,7 +217,7 @@ namespace lsm {
 					}
 				}
 
-				if (wait) resume_writes.acquire();
+				if (wait) resume_writes.acquire(); // flusher changes status of writer_waiting.
 
 				{
 					std::unique_lock<std::shared_mutex> lock(active_lock);
