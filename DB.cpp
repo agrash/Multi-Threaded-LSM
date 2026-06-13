@@ -8,21 +8,21 @@ namespace lsm {
 
 		writer_thread = std::thread(&DB::writer, this);
 
-		for (auto& thread : reader_threads) thread = std::thread(&DB::reader, this);
+		//for (auto& thread : reader_threads) thread = std::thread(&DB::reader, this);
 	}
 
 	DB::~DB() {
 
 		run_writer.store(false, std::memory_order_relaxed);
-		run_readers.store(false, std::memory_order_relaxed);
+		//run_readers.store(false, std::memory_order_relaxed);
 
 		writer_buffer.stop(1);
-		reader_buffer.stop(NUM_READER_THREADS);
+		//reader_buffer.stop(NUM_READER_THREADS);
 
 		if (writer_thread.joinable()) writer_thread.join();
-		for (auto& thread : reader_threads) {
+		/*for (auto& thread : reader_threads) {
 		    if (thread.joinable()) thread.join();
-		}
+		}*/
 
 		run_memtable_flusher.store(false, std::memory_order_relaxed);
 		start_flush.release();
@@ -172,14 +172,14 @@ namespace lsm {
 			insert(container.key, container.val, container.is_tombstone);
 
 			// sequence number of jobs completed by writer always increases.
-			highest_write_completed.store(job.sequence_number, std::memory_order_relaxed);
-			highest_write_completed.notify_all();
+			/*highest_write_completed.store(job.sequence_number, std::memory_order_relaxed);
+			highest_write_completed.notify_all();*/
 		}
 
 		std::cout<<"Stopped Writer\n";
 	}
 
-	void DB::reader() {
+	/*void DB::reader() {
 		std::vector<char> buffer(100 * 100);
 		while (run_readers.load(std::memory_order_relaxed)) {
 			auto job = reader_buffer.consume();
@@ -201,7 +201,7 @@ namespace lsm {
 		}
 
 		std::cout<<"Stopped a Reader\n";
-	}
+	}*/
 
 	void DB::checkAndHandleFlush() {
 		{
@@ -237,9 +237,9 @@ namespace lsm {
 		writeBufferElem job{ dataContainer(key, val, tombstone), 0 };
 
 		{
-			std::unique_lock<std::shared_mutex> lock(highest_write_lock);
-			highest_write_received = sequence_counter++;
-			job.sequence_number = highest_write_received;
+			//std::unique_lock<std::shared_mutex> lock(highest_write_lock);
+			//highest_write_received = sequence_counter++;
+			//job.sequence_number = highest_write_received;
 			writer_buffer.produce(job); // need to put in lock to maintain the property that writer takes job in increasing order of sequence number.
 		}
 
@@ -251,7 +251,7 @@ namespace lsm {
 
 	std::optional<std::string> DB::get(const std::string& key) {
 
-		std::optional<std::string> result;
+		/*std::optional<std::string> result;
 		std::binary_semaphore signal_done{0};
 
 		readBufferElem job{key, &result, &signal_done, 0};
@@ -265,7 +265,9 @@ namespace lsm {
 
 		signal_done.acquire();
 
-		return result;
+		return result;*/
+
+		return search(key);
 	}
 
 	void DB::insert(std::string& key, std::string& val, bool tombstone) {
@@ -306,7 +308,7 @@ namespace lsm {
 		return std::nullopt;
 	}
 
-	std::optional<std::string> DB::search(const std::string& key, std::vector<char>& buffer) {
+	std::optional<std::string> DB::search(const std::string& key) {
 		auto memtable_result = searchInMemtable(key);
 		if (memtable_result) { return memtable_result; }
 
@@ -322,7 +324,7 @@ namespace lsm {
 			for (int i = (int)readers_at_level[level].size() - 1; i>=0; --i) {
 				if (!filters_at_level[level][i]->contains(h1, h2)) {continue;}
 
-				auto res = readers_at_level[level][i]->findKey(key, buffer);
+				auto res = readers_at_level[level][i]->findKey(key);
 				if (res) {return res;}
 			}
 		}

@@ -50,7 +50,7 @@ namespace lsm {
 		std::shared_mutex inactive_memtable_lock;
 
 		static constexpr size_t RING_BUFFER_SIZE = 20000;
-		static constexpr size_t NUM_READER_THREADS = 20;
+		static constexpr size_t NUM_READER_THREADS = 10;
 
 		
 
@@ -58,7 +58,7 @@ namespace lsm {
 		std::shared_mutex highest_write_lock;
 
 		RingBuffer<writeBufferElem, RING_BUFFER_SIZE> writer_buffer;
-		RingBuffer<readBufferElem, RING_BUFFER_SIZE> reader_buffer; 
+		//RingBuffer<readBufferElem, RING_BUFFER_SIZE> reader_buffer; 
 
 		uint64_t sequence_counter = 1;
 		std::atomic<uint64_t> highest_write_completed{0};
@@ -112,7 +112,7 @@ namespace lsm {
 
 		void insert(std::string& key, std::string& val, bool tombstone = false);
 
-		std::optional<std::string> search(const std::string& key, std::vector<char>& buffer);
+		std::optional<std::string> search(const std::string& key);
 
 
 	public:

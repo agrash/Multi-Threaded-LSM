@@ -6,32 +6,34 @@ namespace lsm {
 	SSTableReader::~SSTableReader() {
 		close(fd);
 
+		munmap(const_cast<char*>(file_data), file_size);
+
 		std::filesystem::remove(filepath);
 	}
 
 	SSTableReader::SSTableReader(const std::string& filepath) : filepath(filepath) {
 		fd = open(filepath.c_str(), O_RDONLY);
-		if (fd == -1) {
-			throw std::runtime_error("Unable to open file " + filepath);
-		}
-
-		fcntl(fd, F_RDAHEAD, 0);
+		if (fd == -1) throw std::runtime_error("Unable to open file " + filepath);
 
 		struct stat file_stat;
-		if (fstat(fd, &file_stat) == -1) {
-			throw std::runtime_error("Unable to get file stats" + filepath);
-		}
+		if (fstat(fd, &file_stat) == -1) throw std::runtime_error("Unable to get file stats" + filepath);
 
-		uint64_t offset_start = file_stat.st_size - sizeof(uint64_t);
-		pread(fd, reinterpret_cast<char*> (&index_offset), sizeof(uint64_t), offset_start);
+		file_size = file_stat.st_size;
+
+		void* base = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+		if (base == MAP_FAILED) throw std::runtime_error("Unable to map file " + filepath);
+
+		file_data = static_cast<const char*>(base);
+		madvise(base, file_size, MADV_RANDOM);
+
+		uint64_t offset_start = file_size - sizeof(uint64_t);
+		memcpy(&index_offset, file_data + offset_start, sizeof(uint64_t));
 
 		uint64_t index_size = offset_start - index_offset;
 
-		std::vector<char> buffer(index_size);
-		pread(fd, buffer.data(), index_size, index_offset);
+		std::string_view buffer(file_data + index_offset, index_size);
 
 		uint64_t curr = 0;
-
 		while (curr < index_size) {
 			uint32_t key_length;
 			memcpy(&key_length, buffer.data() + curr, sizeof(uint32_t));
@@ -48,11 +50,9 @@ namespace lsm {
 
 			index.emplace_back(std::move(key), offset);
 		}
-
-		fsync(fd);
 	}
 
-	std::optional<std::string> SSTableReader::findKey(const std::string& key, std::vector<char>& buffer) {
+	std::optional<std::string> SSTableReader::findKey(const std::string& key) {
 
 		Bookmark dummy(key, 0);
 		int idx = upper_bound(index.begin(), index.end(), dummy) - index.begin() - 1;
@@ -66,15 +66,12 @@ namespace lsm {
 
 		uint64_t block_size = end - start;
 
-		if (buffer.size() < block_size) buffer.resize(block_size);
-
-		pread(fd, buffer.data(), block_size, start);
+		std::string_view buffer(file_data + start, block_size);
 
 		uint64_t curr = 0;
 
 		uint8_t tombstone;
 		uint32_t key_length, val_length;
-		std::string_view view(buffer.data(), buffer.size());
 
 		while (curr < block_size) {	
 
@@ -84,7 +81,7 @@ namespace lsm {
 			memcpy(&key_length, buffer.data() + curr, sizeof(uint32_t));
 			curr += sizeof(uint32_t);
 
-			auto cmp_result = view.substr(curr, key_length) <=> key;
+			auto cmp_result = buffer.substr(curr, key_length) <=> key;
 			curr += key_length;
 
 			if (tombstone == 0) {
@@ -94,7 +91,7 @@ namespace lsm {
 
 			if (cmp_result == 0) {
 				if (tombstone == 1) return "";
-				else return std::string{view.substr(curr, val_length)};
+				else return std::string{buffer.substr(curr, val_length)};
 			}
 			else if (cmp_result > 0) return std::nullopt;
 

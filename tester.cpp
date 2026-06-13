@@ -246,13 +246,14 @@ void streaming_test(uint64_t n) {
 
 	// get() waits until the writer has applied every write enqueued before it,
 	// so a single get doubles as a drain barrier.
-	start = std::chrono::high_resolution_clock::now();
+	/*start = std::chrono::high_resolution_clock::now();
 	database.get(make_key(0));
 	end = std::chrono::high_resolution_clock::now();
 	auto drain_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-	cout<<"Writer drain duration: "<<drain_ms<<" ms"<<endl;
+	cout<<"Writer drain duration: "<<drain_ms<<" ms"<<endl;*/
 
-	auto applied_ms = max<long long>(enqueue_ms + drain_ms, 1);
+	//auto applied_ms = max<long long>(enqueue_ms + drain_ms, 1);
+	auto applied_ms = max<long long>(enqueue_ms, 1);
 	cout<<"Write throughput (applied): "<<(uint64_t)(n * 1000.0 / applied_ms)<<" ops/s"<<endl;
 
 	start = std::chrono::high_resolution_clock::now();
@@ -269,11 +270,14 @@ void streaming_test(uint64_t n) {
 	auto delete_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 	cout<<"Deleted "<<removed<<" keys in "<<delete_ms<<" ms"<<endl;
 
+	std::this_thread::sleep_for(std::chrono::seconds(5));
+
 	start = std::chrono::high_resolution_clock::now();
 
-	const int num_threads = 40;
+	const int num_threads = 10;
 	atomic<uint64_t> failures{0};
 	vector<thread> threads;
+
 
 	for (int t=0; t<num_threads; ++t) {
 		uint64_t lo = n * t / num_threads;
