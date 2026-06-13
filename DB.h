@@ -50,7 +50,7 @@ namespace lsm {
 		std::shared_mutex inactive_memtable_lock;
 
 		static constexpr size_t RING_BUFFER_SIZE = 20000;
-		static constexpr size_t NUM_READER_THREADS = 10;
+		static constexpr size_t NUM_READER_THREADS = 20;
 
 		
 

@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <algorithm>
+#include <string_view>
 #include "helper.h"
 
 namespace lsm {

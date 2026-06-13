@@ -15,6 +15,8 @@ namespace lsm {
 			throw std::runtime_error("Unable to open file " + filepath);
 		}
 
+		fcntl(fd, F_RDAHEAD, 0);
+
 		struct stat file_stat;
 		if (fstat(fd, &file_stat) == -1) {
 			throw std::runtime_error("Unable to get file stats" + filepath);
@@ -50,8 +52,6 @@ namespace lsm {
 		fsync(fd);
 	}
 
-	extern uint64_t decode(char* data, uint64_t offset, bool& is_tombstone, std::string& key, std::string& val);
-
 	std::optional<std::string> SSTableReader::findKey(const std::string& key, std::vector<char>& buffer) {
 
 		Bookmark dummy(key, 0);
@@ -72,21 +72,33 @@ namespace lsm {
 
 		uint64_t curr = 0;
 
-		bool is_tombstone;
-		std::string saved_key, saved_val;
+		uint8_t tombstone;
+		uint32_t key_length, val_length;
+		std::string_view view(buffer.data(), buffer.size());
+
 		while (curr < block_size) {	
 
-			curr += decode(buffer.data(), curr, is_tombstone, saved_key, saved_val);
+			memcpy(&tombstone, buffer.data() + curr, sizeof(uint8_t));
+			curr += sizeof(uint8_t);
 
-			auto cmp_result = saved_key <=> key;
+			memcpy(&key_length, buffer.data() + curr, sizeof(uint32_t));
+			curr += sizeof(uint32_t);
+
+			auto cmp_result = view.substr(curr, key_length) <=> key;
+			curr += key_length;
+
+			if (tombstone == 0) {
+				memcpy(&val_length, buffer.data() + curr, sizeof(uint32_t));
+				curr += sizeof(uint32_t);
+			}
+
 			if (cmp_result == 0) {
-				//std::cout<<"Key Found"<<std::endl;
-				if (is_tombstone) {return "";}
-				else {return saved_val;}
+				if (tombstone == 1) return "";
+				else return std::string{view.substr(curr, val_length)};
 			}
-			else if (cmp_result > 0) {
-				return std::nullopt;
-			}
+			else if (cmp_result > 0) return std::nullopt;
+
+			if (tombstone == 0) curr += val_length;
 		}
 
 		return std::nullopt;

@@ -8,6 +8,8 @@
 //#include <omp.h>
 #include <unordered_map>
 #include <atomic>
+#include <numeric>
+#include <cstdlib>
 #include "DB.h"
 using namespace std;
 using namespace lsm;
@@ -35,13 +37,15 @@ void check_databse(DB& database, const vector<pair<string, string>>& data, int s
 	}
 }
 
-/*void insert_to_databse(DB& database, const vector<pair<string, string>>& data, int start, int end) {
+void insert_to_databse(DB& database, const vector<pair<string, string>>& data, int start, int end) {
 	for (int i=start; i<end; ++i) {
 		database.put(data[i].first, data[i].second);
 	}
-}*/
+}
 
-int main() {
+// Old harness. Materializes the whole dataset in RAM up to 3 times (map + two
+// vectors), so at large n the harness OOMs long before the engine breaks a sweat.
+void materialized_test() {
 	DB database;
 
 	const int limit = 1000000;
@@ -71,9 +75,21 @@ int main() {
 		write_data.emplace_back(key, val);
 	}
 
-	auto start = std::chrono::high_resolution_clock::now();
+	cout<<"Starting Insertion into Database."<<endl;
 
-	//#pragma omp parallel for num_threads(4)
+	size_t st = 0;
+	int num_threads = 10;
+	size_t e = write_data.size() / num_threads;
+	std::vector<std::thread> threads;
+
+	auto start = std::chrono::high_resolution_clock::now();
+	for (int i=0; i<num_threads; ++i) {
+		threads.emplace_back(&insert_to_databse, std::ref(database), std::cref(write_data), st, e);
+		st = e;
+		e = e + write_data.size()/num_threads;
+	}
+	for (auto& t : threads) t.join();
+
 	for (const auto& [key, val] : write_data) {
 		database.put(key, val);
 	}
@@ -101,22 +117,25 @@ int main() {
 		key_val.emplace_back(key, val);
 	}
 
+	cout<<"Shuffling keys."<<endl;
+
 	shuffle(key_val.begin(), key_val.end(), length_gen);
+
+	cout<<"Starting reading from database."<<endl;
 
 	//std::this_thread::sleep_for(std::chrono::seconds(20));
 
 	cout<<"Phase 1 done"<<endl;
 
+	st = 0;
+	num_threads = 40;
+	e = key_val.size() / num_threads;
+	threads.clear();
 	start = std::chrono::high_resolution_clock::now();
-	
-	size_t st = 0;
-	int num_threads = 20;
-	size_t e = key_val.size() / num_threads;
-	std::vector<std::thread> threads;
 	for (int i=0; i<num_threads; ++i) {
 		threads.emplace_back(&check_databse, std::ref(database), std::cref(key_val), st, e);
 		st = e;
-		e = min(key_val.size(), e + key_val.size()/num_threads);
+		e = e + key_val.size()/num_threads;
 	}
 	for (auto& t : threads) t.join();
 
@@ -143,11 +162,166 @@ int main() {
 			if (res) {cout<<"Excess "<<*res<<endl;}
 			else {cout<<"Didn't find "<<it->second<<endl;}
 			cout<<"Failed"<<endl;
-			return 0;
+			return;
 		}
 	}*/
 
 	cout<<"All Clear!!!"<<endl;
+}
+
+
+// New harness. Nothing is materialized: every key, value, and delete decision is
+// re-derivable from its index through a fixed seed, so memory stays O(1) at any n,
+// runs are reproducible, and the read phase can verify exact values for all n keys.
+
+const uint64_t HARNESS_SEED = 0xC0FFEE123ULL;
+
+inline uint64_t splitmix64(uint64_t x) {
+	x += 0x9E3779B97F4A7C15ULL;
+	x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+	x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+	return x ^ (x >> 31);
+}
+
+// Index prefix makes keys unique by construction (no dedup map needed); random
+// padding keeps byte content and sizes comparable to the old harness.
+string make_key(uint64_t i) {
+	uint64_t h = splitmix64(i ^ HARNESS_SEED);
+	string k = to_string(i);
+	k += '_';
+	size_t pad = 1 + h % 80;
+	k.reserve(k.size() + pad);
+	for (size_t j=0; j<pad; ++j) {
+		h = splitmix64(h);
+		k += (char)(h & 127);
+	}
+	return k;
+}
+
+// Never empty, so a "" result can only mean a tombstone.
+string make_val(uint64_t i) {
+	uint64_t h = splitmix64(i ^ ~HARNESS_SEED);
+	size_t len = 1 + h % 100;
+	string v;
+	v.reserve(len);
+	for (size_t j=0; j<len; ++j) {
+		h = splitmix64(h);
+		v += (char)(h & 127);
+	}
+	return v;
+}
+
+// ~5% of keys get deleted; recomputable in the read phase.
+bool is_removed(uint64_t i) {
+	return splitmix64(i * 0x9E3779B97F4A7C15ULL ^ HARNESS_SEED) % 100 < 5;
+}
+
+// Visiting j -> (j * mult) % n for j in [0, n) hits every index exactly once when
+// gcd(mult, n) == 1, giving a shuffled access order with nothing stored.
+uint64_t coprimeMultiplier(uint64_t n, uint64_t start) {
+	uint64_t mult = start | 1;
+	while (gcd(mult, n) != 1) mult += 2;
+	return mult;
+}
+
+void streaming_test(uint64_t n) {
+	DB database;
+
+	// j * mult must not overflow: j < n and mult ~2^31.5, safe for n up to ~2^32.
+	const uint64_t write_mult = coprimeMultiplier(n, 2654435761ULL);
+	const uint64_t read_mult = coprimeMultiplier(n, write_mult + 1000003ULL);
+
+	cout<<"Streaming test: n = "<<n<<", seed = "<<HARNESS_SEED<<endl;
+
+	auto start = std::chrono::high_resolution_clock::now();
+
+	for (uint64_t j=0; j<n; ++j) {
+		uint64_t i = (j * write_mult) % n;
+		database.put(make_key(i), make_val(i));
+	}
+
+	auto end = std::chrono::high_resolution_clock::now();
+	auto enqueue_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	cout<<"Write enqueue duration: "<<enqueue_ms<<" ms"<<endl;
+
+	// get() waits until the writer has applied every write enqueued before it,
+	// so a single get doubles as a drain barrier.
+	start = std::chrono::high_resolution_clock::now();
+	database.get(make_key(0));
+	end = std::chrono::high_resolution_clock::now();
+	auto drain_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	cout<<"Writer drain duration: "<<drain_ms<<" ms"<<endl;
+
+	auto applied_ms = max<long long>(enqueue_ms + drain_ms, 1);
+	cout<<"Write throughput (applied): "<<(uint64_t)(n * 1000.0 / applied_ms)<<" ops/s"<<endl;
+
+	start = std::chrono::high_resolution_clock::now();
+
+	uint64_t removed = 0;
+	for (uint64_t i=0; i<n; ++i) {
+		if (is_removed(i)) {
+			database.remove(make_key(i));
+			++removed;
+		}
+	}
+
+	end = std::chrono::high_resolution_clock::now();
+	auto delete_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	cout<<"Deleted "<<removed<<" keys in "<<delete_ms<<" ms"<<endl;
+
+	start = std::chrono::high_resolution_clock::now();
+
+	const int num_threads = 40;
+	atomic<uint64_t> failures{0};
+	vector<thread> threads;
+
+	for (int t=0; t<num_threads; ++t) {
+		uint64_t lo = n * t / num_threads;
+		uint64_t hi = n * (t+1) / num_threads;
+
+		threads.emplace_back([&database, &failures, lo, hi, n, read_mult]() {
+			uint64_t local_failures = 0;
+			for (uint64_t j=lo; j<hi; ++j) {
+				uint64_t i = (j * read_mult) % n;
+				auto res = database.get(make_key(i));
+
+				if (is_removed(i)) {
+					if (res && *res != "") ++local_failures;          // deleted key came back
+				}
+				else {
+					if (!res || *res != make_val(i)) ++local_failures; // lost or wrong value
+				}
+			}
+			failures.fetch_add(local_failures);
+		});
+	}
+	for (auto& t : threads) t.join();
+
+	end = std::chrono::high_resolution_clock::now();
+	auto read_ms = max<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count(), 1);
+
+	cout<<"Read+verify duration: "<<read_ms<<" ms ("<<(uint64_t)(n * 1000.0 / read_ms)<<" ops/s)"<<endl;
+
+	if (failures == 0) {
+		cout<<"All Clear!!!"<<endl;
+	}
+	else {
+		cout<<failures<<" verification failures!"<<endl;
+	}
+}
+
+int main(int argc, char* argv[]) {
+	uint64_t n = 1000000;
+	if (argc > 1) {
+		n = strtoull(argv[1], nullptr, 10);
+		if (n == 0) {
+			cerr<<"Invalid count: "<<argv[1]<<endl;
+			return 1;
+		}
+	}
+
+	streaming_test(n);
+	//materialized_test();
 
 	return 0;
 }

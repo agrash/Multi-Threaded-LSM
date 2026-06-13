@@ -12,6 +12,18 @@ namespace lsm {
 	}
 
 	DB::~DB() {
+
+		run_writer.store(false, std::memory_order_relaxed);
+		run_readers.store(false, std::memory_order_relaxed);
+
+		writer_buffer.stop(1);
+		reader_buffer.stop(NUM_READER_THREADS);
+
+		if (writer_thread.joinable()) writer_thread.join();
+		for (auto& thread : reader_threads) {
+		    if (thread.joinable()) thread.join();
+		}
+
 		run_memtable_flusher.store(false, std::memory_order_relaxed);
 		start_flush.release();
 
@@ -24,17 +36,6 @@ namespace lsm {
 
 		if (compactor_thread.joinable()) {
 			compactor_thread.join();
-		}
-
-		run_writer.store(false, std::memory_order_relaxed);
-		run_readers.store(false, std::memory_order_relaxed);
-
-		writer_buffer.stop(1);
-		reader_buffer.stop(NUM_READER_THREADS);
-
-		if (writer_thread.joinable()) writer_thread.join();
-		for (auto& thread : reader_threads) {
-		    if (thread.joinable()) thread.join();
 		}
 
 	}
@@ -175,7 +176,7 @@ namespace lsm {
 			highest_write_completed.notify_all();
 		}
 
-		std::cout<<"Stopped Writer"<<std::endl;
+		std::cout<<"Stopped Writer\n";
 	}
 
 	void DB::reader() {
@@ -199,7 +200,7 @@ namespace lsm {
 
 		}
 
-		std::cout<<"Stopped a Reader"<<std::endl;
+		std::cout<<"Stopped a Reader\n";
 	}
 
 	void DB::checkAndHandleFlush() {

@@ -11,7 +11,7 @@ namespace lsm {
 		size_t added;
 		uint64_t current_offset;
 
-		const size_t INDEX_ENTRY_SIZE = 100;
+		const size_t INDEX_ENTRY_SIZE = 40;
 
 		BloomFilter& filter;
 

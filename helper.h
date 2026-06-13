@@ -34,7 +34,7 @@ namespace lsm {
 		std::vector<bool> hash_table;
 		int num_hashes;
 	public:
-		BloomFilter(int size, int num_hashes) : hash_table(size), num_hashes(num_hashes) {}
+		BloomFilter(size_t size, int num_hashes) : hash_table(size), num_hashes(num_hashes) {}
 
 		void add(const std::string& key);
 		bool contains(uint32_t h1, uint32_t h2);
