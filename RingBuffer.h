@@ -2,6 +2,7 @@
 #include <semaphore>
 #include <vector>
 #include <mutex>
+#include <atomic>
 
 template<typename T, int N>
 class RingBuffer {
@@ -11,9 +12,10 @@ private:
 	int out;
 
 	std::atomic<bool> stop_buffer{false};
+	std::atomic<uint64_t> sequence_number{1};
 
 	std::mutex producer_mutex;
-	std::mutex consumer_mutex;
+	//std::mutex consumer_mutex;
 
 	std::counting_semaphore<N> empty_slots{N};
 	std::counting_semaphore<N> full_slots{0};
@@ -21,12 +23,12 @@ private:
 public:
 	RingBuffer() : in(0), out(0), buffer(N) {}
 
-	void produce(T& item) {
+	void produce(T& item, uint64_t& sequence_num, std::atomic<uint64_t>& highest_write_received) {
 		empty_slots.acquire();
 
-		if (stop_buffer.load(std::memory_order_acquire)) return;
-
 		std::lock_guard<std::mutex> lock(producer_mutex);
+		sequence_num = sequence_number.fetch_add(1, std::memory_order_relaxed);
+		highest_write_received.store(sequence_num, std::memory_order_release);
 
 		buffer[in] = std::move(item);
 		in = in+1 < N ? in+1 : 0;
@@ -39,7 +41,7 @@ public:
 
 		if (stop_buffer.load(std::memory_order_acquire)) return {};
 
-		std::lock_guard<std::mutex> lock(consumer_mutex);
+		//std::lock_guard<std::mutex> lock(consumer_mutex);
 
 		T return_item = std::move(buffer[out]);
 		out = out+1 < N ? out+1 : 0;

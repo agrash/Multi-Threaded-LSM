@@ -31,7 +31,7 @@ namespace lsm {
 			writeBufferElem(dataContainer data, uint64_t sequence_number) : data(std::move(data)), sequence_number(sequence_number) {}
 		};
 
-		struct readBufferElem {
+		/*struct readBufferElem {
 			std::string key;
 			std::optional<std::string>* result_container;
 			std::binary_semaphore* signal_done;
@@ -39,7 +39,7 @@ namespace lsm {
 
 			readBufferElem() : result_container(nullptr), signal_done(nullptr), highest_write(0) {}
 			readBufferElem(std::string key, std::optional<std::string>* result_container, std::binary_semaphore* signal_done, uint64_t highest_write) : key(std::move(key)), result_container(result_container), signal_done(signal_done), highest_write(highest_write) {}
-		};
+		};*/
 
 		WAL wal_log;
 		std::array<SkipList, 2> memtable;
@@ -54,8 +54,7 @@ namespace lsm {
 
 		
 
-		uint64_t highest_write_received = 0;
-		std::shared_mutex highest_write_lock;
+		std::atomic<uint64_t> highest_write_received{0};
 
 		RingBuffer<writeBufferElem, RING_BUFFER_SIZE> writer_buffer;
 		//RingBuffer<readBufferElem, RING_BUFFER_SIZE> reader_buffer; 

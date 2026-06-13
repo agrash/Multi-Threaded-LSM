@@ -172,8 +172,8 @@ namespace lsm {
 			insert(container.key, container.val, container.is_tombstone);
 
 			// sequence number of jobs completed by writer always increases.
-			/*highest_write_completed.store(job.sequence_number, std::memory_order_relaxed);
-			highest_write_completed.notify_all();*/
+			highest_write_completed.store(job.sequence_number, std::memory_order_relaxed);
+			highest_write_completed.notify_all();
 		}
 
 		std::cout<<"Stopped Writer\n";
@@ -236,13 +236,8 @@ namespace lsm {
 	void DB::put(const std::string& key, const std::string& val, bool tombstone) {
 		writeBufferElem job{ dataContainer(key, val, tombstone), 0 };
 
-		{
-			//std::unique_lock<std::shared_mutex> lock(highest_write_lock);
-			//highest_write_received = sequence_counter++;
-			//job.sequence_number = highest_write_received;
-			writer_buffer.produce(job); // need to put in lock to maintain the property that writer takes job in increasing order of sequence number.
-		}
-
+		// going to update sequence number and highest write received inside the ring buffer.
+		writer_buffer.produce(job, job.sequence_number, highest_write_received); // need to put in lock to maintain the property that writer takes job in increasing order of sequence number.
 	}
 
 	void DB::remove(const std::string& key) {
@@ -266,6 +261,16 @@ namespace lsm {
 		signal_done.acquire();
 
 		return result;*/
+
+		uint64_t target = highest_write_received.load(std::memory_order_acquire);
+		auto current_highest_write = highest_write_completed.load(std::memory_order_relaxed);
+
+		while (current_highest_write < target) {
+
+			highest_write_completed.wait(current_highest_write, std::memory_order_relaxed);
+			current_highest_write = highest_write_completed.load(std::memory_order_relaxed);
+
+		}
 
 		return search(key);
 	}
