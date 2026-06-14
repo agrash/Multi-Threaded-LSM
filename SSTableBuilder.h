@@ -20,6 +20,7 @@ namespace lsm {
 		~SSTableBuilder();
 
 		void writeEntry(bool is_tombstone, const std::string& key, const std::string& val);
+		void writeEntry(bool is_tombstone, const std::string_view key, const std::string_view val);
 		void writeIndex();
 
 		void flush(const SkipList& memtable);

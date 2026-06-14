@@ -297,7 +297,7 @@ namespace lsm {
 			auto it = memtable[active].search(key);
 			if (it != memtable[active].end()) {
 				if (it->is_tombstone) {return "";}
-				return it->val;
+				return std::string(it->val);
 			}
 		}
 
@@ -306,7 +306,7 @@ namespace lsm {
 			auto it = memtable[1-active].search(key);
 			if (it != memtable[1-active].end()) {
 				if (it->is_tombstone) {return "";}
-				return it->val;
+				return std::string(it->val);
 			}
 		}
 

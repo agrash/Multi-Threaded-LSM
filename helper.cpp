@@ -38,6 +38,30 @@ namespace lsm {
 		return buffer;
 	}
 
+	std::string encode(bool is_tombstone, const std::string_view key, const std::string_view val) {
+		std::string buffer;
+		uint32_t final_length = 1 + 4 + key.size() + (is_tombstone ? 0 : 4 + val.size());
+		buffer.reserve(final_length);
+
+		uint8_t tombstone = is_tombstone ? 1 : 0;
+		const char* tombstone_ptr = reinterpret_cast<const char*> (&tombstone);
+		buffer.insert(buffer.end(), tombstone_ptr, tombstone_ptr + sizeof(uint8_t));
+
+		auto helper = [&buffer] (const std::string_view s) {
+			uint32_t length = s.size();
+			const char* ptr = reinterpret_cast<const char*> (&length);
+			buffer.insert(buffer.end(), ptr, ptr + sizeof(uint32_t));
+
+			buffer.insert(buffer.end(), s.begin(), s.end());
+		};
+
+		helper(key);
+		if (is_tombstone) {return buffer;}
+
+		helper(val);
+		return buffer;
+	}
+
 	bool decode(std::ifstream& infile, bool& is_tombstone, std::string& key, std::string& val) {
 
 		auto helper = [&infile](std::string& buffer) {
@@ -119,7 +143,30 @@ namespace lsm {
 		return {h1, h2};
 	}
 
+	std::pair<uint32_t, uint32_t> getHashes(const std::string_view key) {
+		uint32_t h1, h2; 
+		MurmurHash3_x86_32(key.data(), key.size(), 0, &h1);
+		MurmurHash3_x86_32(key.data(), key.size(), 1, &h2);
+
+		h2 |= 1;
+
+		return {h1, h2};
+	}
+
 	void BloomFilter::add(const std::string& key) {
+
+		auto [h1, h2] = getHashes(key);
+
+		uint64_t mod_mask = hash_table.size() - 1;
+		for (uint64_t i=0; i<num_hashes; ++i) {
+			uint64_t hash = static_cast<uint64_t>(h1) + i * static_cast<uint64_t>(h2);
+
+			hash = hash & mod_mask;
+			hash_table[static_cast<uint32_t>(hash)] = true;
+		}
+	}
+
+	void BloomFilter::add(const std::string_view key) {
 
 		auto [h1, h2] = getHashes(key);
 

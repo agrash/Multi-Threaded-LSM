@@ -28,10 +28,26 @@ namespace lsm {
 	}
 
 	extern std::string encode(bool is_tombstone, const std::string& key, const std::string& val);
+	extern std::string encode(bool is_tombstone, const std::string_view key, const std::string_view val);
 
 	void SSTableBuilder::writeEntry(bool is_tombstone, const std::string& key, const std::string& val) {
 		if (added == 0) {
 			index.emplace_back(key, current_offset);
+		}
+
+		std::string buffer = encode(is_tombstone, key, val);
+		file.write(buffer.data(), buffer.size());
+
+		filter.add(key);
+
+		current_offset += buffer.size();
+		++added;
+		if (added == INDEX_ENTRY_SIZE) {added = 0;}
+	}
+
+	void SSTableBuilder::writeEntry(bool is_tombstone, const std::string_view key, const std::string_view val) {
+		if (added == 0) {
+			index.emplace_back(std::string(key), current_offset);
 		}
 
 		std::string buffer = encode(is_tombstone, key, val);

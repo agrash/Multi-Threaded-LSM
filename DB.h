@@ -63,7 +63,7 @@ namespace lsm {
 		std::atomic<uint64_t> highest_write_completed{0};
 
 		// need to tune them manually based on key-val sizes and required FP rate.
-		static constexpr size_t FLUSH_TRIGGER = 4 * 1024 * 1024;
+		static constexpr size_t FLUSH_TRIGGER = 64 * 1024 * 1024;
 		static constexpr size_t bloom_filter_size = FLUSH_TRIGGER / (8);  // Keep this a power of 2, if want to change it then need to change the mod logic in bloom filter.
 		const int num_hashes = 8;
 

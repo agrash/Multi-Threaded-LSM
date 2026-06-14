@@ -1,53 +1,60 @@
 #pragma once
 #include "helper.h"
 #include <random>
+#include <string> 
+#include <string_view>
 
 namespace lsm {
 
 	class SkipList {
 	private:
-		struct Node
-		{
-			bool is_tombstone;
-			std::string key;
-			std::string val;
 
-			std::vector<Node*> next;
+		std::vector<char> arena;
+		std::vector<std::string> val_data;
 
-			// have to change these references to value, and the caller would decide whether to pass them as r-value if they no longer want to keep the data associated with it.
-			Node(std::string& key, std::string& val, size_t levels) : is_tombstone(false), key(std::move(key)), val(std::move(val)), next(levels + 1, nullptr) {}
-			size_t getSizeBytes() const;
-			bool isTombstone() const;
-		};
+		static constexpr uint32_t INVALID_INDEX = -1;
 
-		const size_t MAX_LVL = 20;
+		const uint8_t MAX_LVL = 20;
 		const double PROBABILITY = 0.5;
 		std::mt19937 gen;
 		std::geometric_distribution<int> dist;
 
 		size_t byte_counter;
 
-		Node* header;
+		std::vector<uint32_t> getPredecessors(const std::string& key) const;
+		uint8_t calcNodeLevel();
 
-		Node* getHeader() const;
-		std::vector<Node*> getPredecessors(const std::string& key) const;
-		size_t calcNodeLevel();
+		uint32_t constructNode(uint8_t tombstone, const std::string& key, const std::string& val, uint8_t levels);
+		void setNext(const uint32_t node, const uint8_t level, const uint32_t next);
+		uint32_t getNext(const uint32_t node, const uint8_t level) const;
 
-		size_t getEntrySize(const Node* curr) const;
+		std::string_view getKey(const uint32_t node) const;
+		std::optional<std::string_view> getVal(const uint32_t node) const;
 
-		void insertHelper(bool insert_tombstone, std::string& val, Node* curr);
+		void addVal(const uint32_t node, const std::string& val);
+		void updateVal(const uint32_t node, uint8_t tombstone, const std::string& val);
+
 
 	public:
 		SkipList();
 		~SkipList();
 
-		class iterator {
+		struct Node {
+			bool is_tombstone;
+			std::string_view key;
+			std::string_view val;
+		};
+
+		struct iterator {
+		private:
+			uint32_t ptr;
+			Node data;
+			const SkipList* master;
+
 		public:
-			Node* ptr;
+			iterator(uint32_t ptr, const SkipList* master);
 
-			iterator(Node* ptr) : ptr(ptr) {}
-
-			std::string& operator*();
+			std::string_view& operator*();
 	        Node* operator->();
 
 			iterator& operator++();
@@ -60,12 +67,13 @@ namespace lsm {
 		iterator end() const;
 
 		iterator search(const std::string& key) const;
-		// same change needed as Node constructor.
-		void insert(bool insert_tombstone, std::string& key, std::string& val);
+		void insert(bool insert_tombstone, const std::string& key, const std::string& val);
 
 		size_t getSizeBytes() const;
 
 		void clear();
+
+		Node getData(const uint32_t node) const;
 	};
 
 }

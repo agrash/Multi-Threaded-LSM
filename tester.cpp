@@ -224,14 +224,14 @@ uint64_t coprimeMultiplier(uint64_t n, uint64_t start) {
 	return mult;
 }
 
-void streaming_test(uint64_t n) {
+void streaming_test(uint64_t n, int num_threads) {
 	DB database;
 
 	// j * mult must not overflow: j < n and mult ~2^31.5, safe for n up to ~2^32.
 	const uint64_t write_mult = coprimeMultiplier(n, 2654435761ULL);
 	const uint64_t read_mult = coprimeMultiplier(n, write_mult + 1000003ULL);
 
-	cout<<"Streaming test: n = "<<n<<", seed = "<<HARNESS_SEED<<endl;
+	cout<<"Streaming test: n = "<<n<<", read_threads = "<<num_threads<<", seed = "<<HARNESS_SEED<<endl;
 
 	auto start = std::chrono::high_resolution_clock::now();
 
@@ -272,7 +272,6 @@ void streaming_test(uint64_t n) {
 
 	start = std::chrono::high_resolution_clock::now();
 
-	const int num_threads = 20;
 	atomic<uint64_t> failures{0};
 	vector<thread> threads;
 
@@ -322,7 +321,10 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
-	streaming_test(n);
+	int read_threads = 20;
+	if (argc > 2) read_threads = atoi(argv[2]);
+
+	streaming_test(n, read_threads);
 	//materialized_test();
 
 	return 0;
