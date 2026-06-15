@@ -94,10 +94,8 @@ namespace lsm {
 		const std::string prefix = "./Tables/sstable";
 		std::atomic<int> sstable_counter = 0; // to use only by a single writer thread.
 
-		std::vector<std::vector<std::unique_ptr<BloomFilter>>> filters_at_level;
 		std::vector<std::vector<std::unique_ptr<SSTableReader>>> readers_at_level;
 		std::vector<std::shared_mutex> reader_level_locks;
-		std::vector<std::shared_mutex> filter_level_locks;
 
 		void checkAndHandleFlush();
 		void memtableFlush();

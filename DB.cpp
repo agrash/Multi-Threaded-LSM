@@ -2,7 +2,7 @@
 
 namespace lsm {
 
-	DB::DB() : wal_log("wal.log"), filters_at_level(MAX_LEVEL + 1), readers_at_level(MAX_LEVEL + 1), reader_level_locks(MAX_LEVEL + 1), filter_level_locks(MAX_LEVEL + 1) {
+	DB::DB() : wal_log("wal.log"), readers_at_level(MAX_LEVEL + 1), reader_level_locks(MAX_LEVEL + 1) {
 		compactor_thread = std::thread(&DB::compactor, this);
 		flush_thread = std::thread(&DB::memtableFlush, this);
 
@@ -38,6 +38,10 @@ namespace lsm {
 			compactor_thread.join();
 		}
 
+		for (auto& readers : readers_at_level) {
+			for (auto& reader : readers) reader->preserveTable();
+		}
+
 	}
 
 	void DB::memtableFlush() {
@@ -49,18 +53,16 @@ namespace lsm {
 
 			std::cout<<"Trigerring Flush!"<<std::endl;
 
-			auto new_filter = std::make_unique<BloomFilter>(bloom_filter_size, num_hashes);
+			BloomFilter new_filter(bloom_filter_size, num_hashes);
 
 			const std::string flush_name = prefix + "0_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db";
 
-			SSTableBuilder builder(flush_name, *new_filter);
+			SSTableBuilder builder(flush_name, new_filter);
 			builder.flush(memtable[1 - active]); 
 
 			{
 				std::unique_lock<std::shared_mutex> lock1(reader_level_locks[0]);
-				std::unique_lock<std::shared_mutex> lock2(filter_level_locks[0]);
-				readers_at_level[0].emplace_back(std::make_unique<SSTableReader>(flush_name));
-				filters_at_level[0].emplace_back(std::move(new_filter));
+				readers_at_level[0].emplace_back(std::make_unique<SSTableReader>(flush_name, new_filter));
 			}
 
 
@@ -121,25 +123,20 @@ namespace lsm {
 
 				bool remove_tombstones = (curr_level == curr_max_level);
 
-				auto new_filter = std::make_unique<BloomFilter>(filter_size, num_hashes);
+				BloomFilter new_filter(filter_size, num_hashes);
 
 				const std::string merged_file_path = prefix + std::to_string(curr_level + 1) + "_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db"; // This line is safe to run without a lock.
 
-				SSTableMerger merge(remove_tombstones, file_paths, merged_file_path, *new_filter); //Don't need locks for this. (Only compactor adds or remove bloom filters and the files are only made irrelevant by compactor.)	
+				SSTableMerger merge(remove_tombstones, file_paths, merged_file_path, new_filter); //Don't need locks for this. (Only compactor adds or remove bloom filters and the files are only made irrelevant by compactor.)	
 
 				{
 					std::unique_lock<std::shared_mutex> lock1(reader_level_locks[curr_level + 1]);
-					std::unique_lock<std::shared_mutex> lock2(filter_level_locks[curr_level + 1]);
-					readers_at_level[curr_level + 1].emplace_back(std::make_unique<SSTableReader>(merged_file_path));
-					filters_at_level[curr_level + 1].emplace_back(std::move(new_filter));
+					readers_at_level[curr_level + 1].emplace_back(std::make_unique<SSTableReader>(merged_file_path, new_filter));
 				}
 
 				{
 					std::unique_lock<std::shared_mutex> lock1(reader_level_locks[curr_level]);
-					std::unique_lock<std::shared_mutex> lock2(filter_level_locks[curr_level]);
-
 					readers_at_level[curr_level].erase(readers_at_level[curr_level].begin(), readers_at_level[curr_level].begin() + num_files);
-					filters_at_level[curr_level].erase(filters_at_level[curr_level].begin(), filters_at_level[curr_level].begin() + num_files);
 				}
 
 				filter_size *= COMPACTION_TRIGGER;
@@ -324,12 +321,9 @@ namespace lsm {
 		for (size_t level = 0; level <= MAX_LEVEL; ++level) {
 
 			std::shared_lock<std::shared_mutex> lock1(reader_level_locks[level]);
-			std::shared_lock<std::shared_mutex> lock2(filter_level_locks[level]);
 
 			for (int i = (int)readers_at_level[level].size() - 1; i>=0; --i) {
-				if (!filters_at_level[level][i]->contains(h1, h2)) {continue;}
-
-				auto res = readers_at_level[level][i]->findKey(key);
+				auto res = readers_at_level[level][i]->findKey(key, h1, h2);
 				if (res) {return res;}
 			}
 		}

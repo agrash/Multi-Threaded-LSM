@@ -1,3 +1,5 @@
+// This file has been made with help from claude code.
+
 #include <iostream>
 #include <string>
 #include <random>
@@ -57,7 +59,6 @@ void materialized_test() {
 
 	stringGenerator s;
 
-
 	for (int i=0; i<limit; ++i) {
 
 		string key = s.generate(dist(length_gen));
@@ -78,7 +79,7 @@ void materialized_test() {
 	cout<<"Starting Insertion into Database."<<endl;
 
 	size_t st = 0;
-	int num_threads = 10;
+	int num_threads = 1;
 	size_t e = write_data.size() / num_threads;
 	std::vector<std::thread> threads;
 
@@ -90,9 +91,6 @@ void materialized_test() {
 	}
 	for (auto& t : threads) t.join();
 
-	for (const auto& [key, val] : write_data) {
-		database.put(key, val);
-	}
 	auto end = std::chrono::high_resolution_clock::now();
 
 	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -128,7 +126,7 @@ void materialized_test() {
 	cout<<"Phase 1 done"<<endl;
 
 	st = 0;
-	num_threads = 40;
+	num_threads = 20;
 	e = key_val.size() / num_threads;
 	threads.clear();
 	start = std::chrono::high_resolution_clock::now();

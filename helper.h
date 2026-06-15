@@ -40,7 +40,7 @@ namespace lsm {
 
 		void add(const std::string& key);
 		void add(const std::string_view key);
-		bool contains(uint32_t h1, uint32_t h2);
+		bool contains(uint32_t h1, uint32_t h2) const;
 	};
 
 	struct dataContainer {

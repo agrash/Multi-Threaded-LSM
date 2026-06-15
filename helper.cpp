@@ -179,7 +179,7 @@ namespace lsm {
 		}
 	}
 
-	bool BloomFilter::contains(uint32_t h1, uint32_t h2) {
+	bool BloomFilter::contains(uint32_t h1, uint32_t h2) const {
 
 		uint64_t mod_mask = hash_table.size() - 1;
 		for (uint64_t i=0; i<num_hashes; ++i) {

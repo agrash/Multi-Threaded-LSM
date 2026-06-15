@@ -3,15 +3,19 @@
 namespace lsm {
 
 
+	void SSTableReader::preserveTable() {
+		delete_file_at_destruction = false;
+	}
+
 	SSTableReader::~SSTableReader() {
 		close(fd);
 
 		munmap(const_cast<char*>(file_data), file_size);
 
-		std::filesystem::remove(filepath);
+		if (delete_file_at_destruction) std::filesystem::remove(filepath);
 	}
 
-	SSTableReader::SSTableReader(const std::string& filepath) : filepath(filepath) {
+	SSTableReader::SSTableReader(const std::string& filepath, BloomFilter& filter) : filepath(filepath), filter(std::move(filter)) {
 		fd = open(filepath.c_str(), O_RDONLY);
 		if (fd == -1) throw std::runtime_error("Unable to open file " + filepath);
 
@@ -52,7 +56,9 @@ namespace lsm {
 		}
 	}
 
-	std::optional<std::string> SSTableReader::findKey(const std::string& key) {
+	std::optional<std::string> SSTableReader::findKey(const std::string& key, uint32_t h1, uint32_t h2) {
+
+		if (!filter.contains(h1, h2)) return std::nullopt;
 
 		Bookmark dummy(key, 0);
 		int idx = upper_bound(index.begin(), index.end(), dummy) - index.begin() - 1;
