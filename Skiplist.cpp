@@ -44,7 +44,7 @@ namespace lsm {
 
 		uint32_t val_data_size = val_data.size();
 		memcpy(arena.data() + offset, reinterpret_cast<const char*> (&val_data_size), sizeof(uint32_t));
-		val_data.push_back(val);
+		val_data.push_back(std::move(val));
 	}
 
 	void SkipList::updateVal(const uint32_t node, uint8_t tombstone, const std::string& val) {
@@ -68,7 +68,7 @@ namespace lsm {
 		if (tombstone == 1) return;
 
 		if (val_index == INVALID_INDEX) addVal(node, val);
-		else val_data[val_index] = val;
+		else val_data[val_index] = std::move(val);
 
 		byte_counter += val.size();
 	}

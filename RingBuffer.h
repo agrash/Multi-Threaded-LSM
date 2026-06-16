@@ -13,6 +13,7 @@ private:
 
 	std::atomic<bool> stop_buffer{false};
 	std::atomic<uint64_t> sequence_number{1};
+	const uint64_t max_elems = 1000;
 
 	std::mutex producer_mutex;
 	//std::mutex consumer_mutex;
@@ -36,19 +37,19 @@ public:
 		full_slots.release();
 	}
 
-	T consume() {
+	void consume(std::vector<T>& container, uint64_t highest_write_completed) {
 		full_slots.acquire();
 
-		if (stop_buffer.load(std::memory_order_acquire)) return {};
+		if (stop_buffer.load(std::memory_order_acquire)) return;
 
-		//std::lock_guard<std::mutex> lock(consumer_mutex);
+		uint64_t taken = 0;
+		do {
+			container.push_back(std::move(buffer[out]));
+			out = out+1 < N ? out+1 : 0;
+			++taken;
+		} while(taken < max_elems && full_slots.try_acquire());
 
-		T return_item = std::move(buffer[out]);
-		out = out+1 < N ? out+1 : 0;
-
-		empty_slots.release();
-
-		return return_item;
+		empty_slots.release(taken);
 	}
 
 	void stop(int n) {

@@ -160,15 +160,24 @@ namespace lsm {
 
 
 	void DB::writer() {
+		std::vector<writeBufferElem> container;
+		container.reserve(1000);
 		while (run_writer.load(std::memory_order_relaxed)) {
-			auto job = writer_buffer.consume();
+			container.clear();
+			writer_buffer.consume(container, highest_write_completed.load(std::memory_order_relaxed));
 
 			if (!run_writer.load(std::memory_order_relaxed)) break;
 
-			insert(job.key, job.val, job.tombstone);
+			uint64_t highest_completed;
+			for (auto& job : container) {
+				insert(job.key, job.val, job.tombstone);
+				highest_completed = job.sequence_number;
+			}
+
+			wal_log[active].flush();
 
 			// sequence number of jobs completed by writer always increases.
-			highest_write_completed.store(job.sequence_number, std::memory_order_relaxed);
+			highest_write_completed.store(highest_completed, std::memory_order_relaxed);
 			highest_write_completed.notify_all();
 		}
 
@@ -203,6 +212,7 @@ namespace lsm {
 		{
 			//Don't need active lock as only this thread can change the value of active.
 			if (memtable[active].getSizeBytes() >= FLUSH_TRIGGER) {
+				wal_log[active].flush();
 
 				bool wait = false;
 				{
@@ -223,6 +233,7 @@ namespace lsm {
 				}
 
 				start_flush.release();
+
 				wal_log[active].clear();
 				wal_log[active].open(wal_log_counter++);
 			}

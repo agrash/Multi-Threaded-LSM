@@ -16,8 +16,6 @@ namespace lsm {
 		file = fopen(filepath.c_str(), "wb");
 
 		if (file == NULL) throw std::runtime_error("Unable to open file " + filepath);
-
-		fcntl(fileno(file), F_FULLFSYNC);
 	}
 
 	void WAL::writeKeyOrVal(const std::string_view s) {
@@ -38,6 +36,7 @@ namespace lsm {
 
 	void WAL::flush() {
 		if (file != NULL) {
+			fcntl(fileno(file), F_FULLFSYNC);
 			fflush(file);
 			fsync(fileno(file));
 		}
