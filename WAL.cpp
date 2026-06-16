@@ -37,7 +37,7 @@ namespace lsm {
 	void WAL::flush() {
 		if (file != NULL) {
 			fcntl(fileno(file), F_FULLFSYNC);
-			fflush(file);
+			//fflush(file);
 			fsync(fileno(file));
 		}
 	}

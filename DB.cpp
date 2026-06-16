@@ -161,7 +161,7 @@ namespace lsm {
 
 	void DB::writer() {
 		std::vector<writeBufferElem> container;
-		container.reserve(1000);
+		container.reserve(RING_BUFFER_SIZE / 2);
 		while (run_writer.load(std::memory_order_relaxed)) {
 			container.clear();
 			writer_buffer.consume(container, highest_write_completed.load(std::memory_order_relaxed));

@@ -13,7 +13,7 @@ private:
 
 	std::atomic<bool> stop_buffer{false};
 	std::atomic<uint64_t> sequence_number{1};
-	const uint64_t max_elems = 1000;
+	const uint64_t max_elems = N / 2;
 
 	std::mutex producer_mutex;
 	//std::mutex consumer_mutex;
