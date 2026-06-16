@@ -4,6 +4,7 @@ namespace lsm {
 
 	DB::DB() : readers_at_level(MAX_LEVEL + 1, std::make_shared<LevelReaders>()) {
 		compactor_thread = std::thread(&DB::compactor, this);
+		compactor_threadv2 = std::thread(&DB::compactorv2, this);
 		flush_thread = std::thread(&DB::memtableFlush, this);
 
 		wal_log[active].open(0);
@@ -37,6 +38,13 @@ namespace lsm {
 
 		if (compactor_thread.joinable()) {
 			compactor_thread.join();
+		}
+
+		run_compactorv2.store(false, std::memory_order_relaxed);
+		start_compactorv2.release();
+
+		if (compactor_threadv2.joinable()) {
+			compactor_threadv2.join();
 		}
 
 		for (auto& readers : readers_at_level) {
@@ -112,6 +120,97 @@ namespace lsm {
 				if (readers_at_level[0]->size() >= 2 * COMPACTION_TRIGGER) { start_compactor.release(); }
 			}
 
+			while (curr_level < SECOND_COMPACTOR_LEVEL && continue_compaction) {
+
+				std::cout<<"Trigerring Compaction"<<std::endl;
+
+				size_t num_files = COMPACTION_TRIGGER;
+
+				std::vector<std::shared_ptr<SSTableReader>> files;
+				{
+					auto readers = std::atomic_load_explicit(&readers_at_level[curr_level], (std::memory_order_acquire));
+					for (size_t i=0; i<num_files; ++i) {
+						files.push_back((*readers)[i]);
+					}
+				}
+
+				bool remove_tombstones = (curr_level == curr_max_level);
+
+				BloomFilter new_filter(filter_size, num_hashes);
+
+				const std::string merged_file_path = prefix + std::to_string(curr_level + 1) + "_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db"; // This line is safe to run without a lock.
+
+				SSTableMerger merge(remove_tombstones, files, merged_file_path, new_filter); //Don't need locks for this. (Only compactor adds or remove bloom filters and the files are only made irrelevant by compactor.)	
+
+				if (curr_level + 1 < SECOND_COMPACTOR_LEVEL) {
+
+					auto old = std::atomic_load_explicit(&readers_at_level[curr_level + 1], std::memory_order_acquire);
+					auto neu = make_shared<LevelReaders>(*old);
+					neu->push_back(std::make_shared<SSTableReader>(merged_file_path, new_filter));
+
+					std::atomic_store_explicit(&readers_at_level[curr_level + 1], neu, std::memory_order_release);
+				}
+				else {
+					std::unique_lock<std::mutex> lock(compactor_lock);
+					auto old = std::atomic_load_explicit(&readers_at_level[curr_level + 1], std::memory_order_acquire);
+					auto neu = make_shared<LevelReaders>(*old);
+					neu->push_back(std::make_shared<SSTableReader>(merged_file_path, new_filter));
+
+					std::atomic_store_explicit(&readers_at_level[curr_level + 1], neu, std::memory_order_release);
+				}
+
+				if (curr_level == 0) {
+					std::unique_lock<std::mutex> lock(level0_lock);
+					auto old = std::atomic_load_explicit(&readers_at_level[curr_level], std::memory_order_acquire);
+					auto neu = make_shared<LevelReaders>(*old);
+					neu->erase(neu->begin(), neu->begin() + num_files);
+
+					std::atomic_store_explicit(&readers_at_level[curr_level], neu, std::memory_order_release);
+				}
+				else {
+					auto old = std::atomic_load_explicit(&readers_at_level[curr_level], std::memory_order_acquire);
+					auto neu = make_shared<LevelReaders>(*old);
+					neu->erase(neu->begin(), neu->begin() + num_files);
+
+					std::atomic_store_explicit(&readers_at_level[curr_level], neu, std::memory_order_release);
+				}
+
+				filter_size *= COMPACTION_TRIGGER;
+				++curr_level;
+				if (curr_level > curr_max_level) { curr_max_level = curr_level; }
+
+				if (curr_level == SECOND_COMPACTOR_LEVEL) {
+					std::unique_lock<std::mutex> lock(compactor_lock);
+					continue_compaction = readers_at_level[curr_level]->size() >= COMPACTION_TRIGGER;
+				}
+				else continue_compaction = readers_at_level[curr_level]->size() >= COMPACTION_TRIGGER;
+				
+
+				std::cout<<"Finished Compaction"<<std::endl;
+			}
+
+			if (curr_level == SECOND_COMPACTOR_LEVEL && continue_compaction) start_compactorv2.release();
+
+		}
+
+		std::cout<<"Stopped Compactor"<<std::endl;
+	}
+
+	void DB::compactorv2() {
+		while (run_compactorv2.load(std::memory_order_relaxed)) {
+			start_compactorv2.acquire();
+
+			size_t curr_level = SECOND_COMPACTOR_LEVEL;
+			size_t filter_size = COMPACTION_TRIGGER	* bloom_filter_size_second_compactor;
+
+			bool continue_compaction = false;
+			{
+				std::unique_lock<std::mutex> lock(compactor_lock);
+				continue_compaction = readers_at_level[curr_level]->size() >= COMPACTION_TRIGGER;
+
+				if (readers_at_level[curr_level]->size() >= 2 * COMPACTION_TRIGGER) { start_compactorv2.release(); }
+			}
+
 			while (curr_level < MAX_LEVEL && continue_compaction) {
 
 				std::cout<<"Trigerring Compaction"<<std::endl;
@@ -142,8 +241,8 @@ namespace lsm {
 					std::atomic_store_explicit(&readers_at_level[curr_level + 1], neu, std::memory_order_release);
 				}
 
-				if (curr_level == 0) {
-					std::unique_lock<std::mutex> lock(level0_lock);
+				if (curr_level == SECOND_COMPACTOR_LEVEL) {
+					std::unique_lock<std::mutex> lock(compactor_lock);
 					auto old = std::atomic_load_explicit(&readers_at_level[curr_level], std::memory_order_acquire);
 					auto neu = make_shared<LevelReaders>(*old);
 					neu->erase(neu->begin(), neu->begin() + num_files);

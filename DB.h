@@ -77,11 +77,19 @@ namespace lsm {
 
 		static constexpr size_t COMPACTION_TRIGGER = 4; // Merge after reaching this many files on a level. Keep this a power of 2 as well or change bloom filter mod logic.
 		static constexpr size_t MAX_LEVEL = 7;
-		size_t curr_max_level = 0; // to use only by compactor
+		std::atomic<size_t> curr_max_level = 0; // to use only by compactor
 
 		std::thread compactor_thread;
 		std::atomic<bool> run_compactor{true};
 		std::binary_semaphore start_compactor{0};
+
+		std::thread compactor_threadv2;
+		std::atomic<bool> run_compactorv2{true};
+		std::binary_semaphore start_compactorv2{0};
+
+		std::mutex compactor_lock;
+		static constexpr size_t bloom_filter_size_second_compactor = bloom_filter_size * COMPACTION_TRIGGER * COMPACTION_TRIGGER;
+		static constexpr size_t SECOND_COMPACTOR_LEVEL = 2;
 
 		std::thread flush_thread;
 		std::atomic<bool> run_memtable_flusher{true};
@@ -95,8 +103,8 @@ namespace lsm {
 		std::atomic<bool> run_writer{true};
 		std::thread writer_thread;
 
-		std::atomic<bool> run_readers{true};
-		std::array<std::thread, NUM_READER_THREADS> reader_threads;
+		//std::atomic<bool> run_readers{true};
+		//std::array<std::thread, NUM_READER_THREADS> reader_threads;
 
 
 		const std::string prefix = "./Tables/sstable";
@@ -109,6 +117,7 @@ namespace lsm {
 		void memtableFlush();
 
 		void compactor();
+		void compactorv2();
 
 		void writer();
 		void reader();
