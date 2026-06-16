@@ -2,7 +2,7 @@
 
 namespace lsm {
 
-	DB::DB() : readers_at_level(MAX_LEVEL + 1), reader_level_locks(MAX_LEVEL + 1) {
+	DB::DB() : readers_at_level(MAX_LEVEL + 1, std::make_shared<LevelReaders>()) {
 		compactor_thread = std::thread(&DB::compactor, this);
 		flush_thread = std::thread(&DB::memtableFlush, this);
 
@@ -40,7 +40,7 @@ namespace lsm {
 		}
 
 		for (auto& readers : readers_at_level) {
-			for (auto& reader : readers) reader->preserveTable();
+			for (auto& reader : *readers) reader->preserveTable();
 		}
 
 	}
@@ -62,8 +62,12 @@ namespace lsm {
 			builder.flush(memtable[1 - active]); 
 
 			{
-				std::unique_lock<std::shared_mutex> lock1(reader_level_locks[0]);
-				readers_at_level[0].emplace_back(std::make_shared<SSTableReader>(flush_name, new_filter));
+				std::unique_lock<std::mutex> lock(level0_lock);
+				auto old = std::atomic_load_explicit(&readers_at_level[0], std::memory_order_acquire);
+				auto neu = make_shared<LevelReaders>(*old);
+				neu->push_back(std::make_shared<SSTableReader>(flush_name, new_filter));
+
+				std::atomic_store_explicit(&readers_at_level[0], neu, std::memory_order_release);
 			}
 
 
@@ -84,8 +88,8 @@ namespace lsm {
 			std::cout<<"Finished Flush!"<<std::endl;
 
 			{
-				std::shared_lock<std::shared_mutex> lock(reader_level_locks[0]);
-				if (readers_at_level[0].size() >= COMPACTION_TRIGGER) { start_compactor.release(); }
+				std::unique_lock<std::mutex> lock(level0_lock);
+				if (readers_at_level[0]->size() >= COMPACTION_TRIGGER) { start_compactor.release(); }
 			}
 		}
 
@@ -102,10 +106,10 @@ namespace lsm {
 
 			bool continue_compaction = false;
 			{
-				std::shared_lock<std::shared_mutex> lock(reader_level_locks[0]);
-				continue_compaction = readers_at_level[0].size() >= COMPACTION_TRIGGER;
+				std::unique_lock<std::mutex> lock(level0_lock);
+				continue_compaction = readers_at_level[0]->size() >= COMPACTION_TRIGGER;
 
-				if (readers_at_level[0].size() >= 2 * COMPACTION_TRIGGER) { start_compactor.release(); }
+				if (readers_at_level[0]->size() >= 2 * COMPACTION_TRIGGER) { start_compactor.release(); }
 			}
 
 			while (curr_level < MAX_LEVEL && continue_compaction) {
@@ -116,9 +120,9 @@ namespace lsm {
 
 				std::vector<std::shared_ptr<SSTableReader>> files;
 				{
-					std::shared_lock<std::shared_mutex> lock(reader_level_locks[curr_level]);
+					auto readers = std::atomic_load_explicit(&readers_at_level[curr_level], (std::memory_order_acquire));
 					for (size_t i=0; i<num_files; ++i) {
-						files.push_back(readers_at_level[curr_level][i]);
+						files.push_back((*readers)[i]);
 					}
 				}
 
@@ -131,23 +135,34 @@ namespace lsm {
 				SSTableMerger merge(remove_tombstones, files, merged_file_path, new_filter); //Don't need locks for this. (Only compactor adds or remove bloom filters and the files are only made irrelevant by compactor.)	
 
 				{
-					std::unique_lock<std::shared_mutex> lock1(reader_level_locks[curr_level + 1]);
-					readers_at_level[curr_level + 1].emplace_back(std::make_shared<SSTableReader>(merged_file_path, new_filter));
+					auto old = std::atomic_load_explicit(&readers_at_level[curr_level + 1], std::memory_order_acquire);
+					auto neu = make_shared<LevelReaders>(*old);
+					neu->push_back(std::make_shared<SSTableReader>(merged_file_path, new_filter));
+
+					std::atomic_store_explicit(&readers_at_level[curr_level + 1], neu, std::memory_order_release);
 				}
 
-				{
-					std::unique_lock<std::shared_mutex> lock1(reader_level_locks[curr_level]);
-					readers_at_level[curr_level].erase(readers_at_level[curr_level].begin(), readers_at_level[curr_level].begin() + num_files);
+				if (curr_level == 0) {
+					std::unique_lock<std::mutex> lock(level0_lock);
+					auto old = std::atomic_load_explicit(&readers_at_level[curr_level], std::memory_order_acquire);
+					auto neu = make_shared<LevelReaders>(*old);
+					neu->erase(neu->begin(), neu->begin() + num_files);
+
+					std::atomic_store_explicit(&readers_at_level[curr_level], neu, std::memory_order_release);
+				}
+				else {
+					auto old = std::atomic_load_explicit(&readers_at_level[curr_level], std::memory_order_acquire);
+					auto neu = make_shared<LevelReaders>(*old);
+					neu->erase(neu->begin(), neu->begin() + num_files);
+
+					std::atomic_store_explicit(&readers_at_level[curr_level], neu, std::memory_order_release);
 				}
 
 				filter_size *= COMPACTION_TRIGGER;
 				++curr_level;
 				if (curr_level > curr_max_level) { curr_max_level = curr_level; }
 
-				{
-					std::shared_lock<std::shared_mutex> lock(reader_level_locks[curr_level]);
-					continue_compaction = readers_at_level[curr_level].size() >= COMPACTION_TRIGGER;
-				}
+				continue_compaction = readers_at_level[curr_level]->size() >= COMPACTION_TRIGGER;
 
 				std::cout<<"Finished Compaction"<<std::endl;
 			}
@@ -331,10 +346,10 @@ namespace lsm {
 
 		for (size_t level = 0; level <= MAX_LEVEL; ++level) {
 
-			std::shared_lock<std::shared_mutex> lock1(reader_level_locks[level]);
+			auto readers = std::atomic_load_explicit(&readers_at_level[level], std::memory_order_acquire);
 
-			for (int i = (int)readers_at_level[level].size() - 1; i>=0; --i) {
-				auto res = readers_at_level[level][i]->findKey(key, h1, h2);
+			for (int i = (int)readers->size() - 1; i>=0; --i) {
+				auto res = (*readers)[i]->findKey(key, h1, h2);
 				if (res) {return res;}
 			}
 		}

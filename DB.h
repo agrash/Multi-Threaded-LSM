@@ -33,6 +33,10 @@ namespace lsm {
 			writeBufferElem(bool tombstone, std::string key, std::string val, uint64_t sequence_number) : tombstone(tombstone), key(std::move(key)), val(std::move(val)), sequence_number(sequence_number) {}
 		};
 
+		using LevelReaders = std::vector<std::shared_ptr<SSTableReader>>;
+		std::vector<std::shared_ptr<LevelReaders>> readers_at_level;
+		std::mutex level0_lock;
+
 		/*struct readBufferElem {
 			std::string key;
 			std::optional<std::string>* result_container;
@@ -71,8 +75,8 @@ namespace lsm {
 		static constexpr size_t bloom_filter_size = FLUSH_TRIGGER / (8);  // Keep this a power of 2, if want to change it then need to change the mod logic in bloom filter.
 		const int num_hashes = 8;
 
-		const size_t COMPACTION_TRIGGER = 4; // Merge after reaching this many files on a level. Keep this a power of 2 as well or change bloom filter mod logic.
-		const size_t MAX_LEVEL = 7;
+		static constexpr size_t COMPACTION_TRIGGER = 4; // Merge after reaching this many files on a level. Keep this a power of 2 as well or change bloom filter mod logic.
+		static constexpr size_t MAX_LEVEL = 7;
 		size_t curr_max_level = 0; // to use only by compactor
 
 		std::thread compactor_thread;
@@ -96,10 +100,10 @@ namespace lsm {
 
 
 		const std::string prefix = "./Tables/sstable";
-		std::atomic<int> sstable_counter = 0; // to use only by a single writer thread.
+		std::atomic<int> sstable_counter = 0; // to use only by a single writer / compactor thread.
 
-		std::vector<std::vector<std::shared_ptr<SSTableReader>>> readers_at_level;
-		std::vector<std::shared_mutex> reader_level_locks;
+		//std::vector<std::vector<std::shared_ptr<SSTableReader>>> readers_at_level;
+		//std::vector<std::shared_mutex> reader_level_locks;
 
 		void checkAndHandleFlush();
 		void memtableFlush();
