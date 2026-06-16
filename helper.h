@@ -24,7 +24,8 @@ namespace lsm {
 		std::string key;
 		uint64_t offset;
 
-		Bookmark(const std::string& key, uint64_t offset) : key(key), offset(offset) {}
+		Bookmark(const std::string_view key, uint64_t offset) : key(std::string(key)), offset(offset) {}
+		Bookmark(std::string key, uint64_t offset) : key(std::move(key)), offset(offset) {}
 
 		bool operator<(const Bookmark& other) const;
 		bool operator<(const std::string& other) const;
@@ -33,14 +34,23 @@ namespace lsm {
 
 	class BloomFilter {
 	private:
-		std::vector<bool> hash_table;
+		const uint64_t table_size;
+		std::vector<uint64_t> hash_table;
 		int num_hashes;
+
+		static constexpr uint64_t word_size = sizeof(uint64_t) * 8;
 	public:
-		BloomFilter(size_t size, int num_hashes) : hash_table(size), num_hashes(num_hashes) {}
+		BloomFilter(uint64_t size, int num_hashes) : table_size(size), hash_table(size / word_size + 1), num_hashes(num_hashes) {}
 
 		void add(const std::string& key);
-		void add(const std::string_view key);
+		void add(const std::string_view& key);
 		bool contains(uint32_t h1, uint32_t h2) const;
+
+		void set(uint64_t i);
+		bool get(uint64_t i) const;
+
+		const uint64_t* getData() const;
+		const uint64_t getElems() const;
 	};
 
 	struct dataContainer {

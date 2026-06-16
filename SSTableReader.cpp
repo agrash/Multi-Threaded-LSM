@@ -8,9 +8,9 @@ namespace lsm {
 	}
 
 	SSTableReader::~SSTableReader() {
-		close(fd);
-
 		munmap(const_cast<char*>(file_data), file_size);
+
+		close(fd);
 
 		if (delete_file_at_destruction) std::filesystem::remove(filepath);
 	}
@@ -30,10 +30,14 @@ namespace lsm {
 		file_data = static_cast<const char*>(base);
 		madvise(base, file_size, MADV_RANDOM);
 
-		uint64_t offset_start = file_size - sizeof(uint64_t);
-		memcpy(&index_offset, file_data + offset_start, sizeof(uint64_t));
+		uint64_t index_offset_start = file_size - sizeof(uint64_t);
+		memcpy(&index_offset, file_data + index_offset_start, sizeof(uint64_t));
 
-		uint64_t index_size = offset_start - index_offset;
+		uint64_t filter_offset_start = index_offset_start - sizeof(uint64_t);
+		uint64_t filter_offset;
+		memcpy(&filter_offset, file_data + filter_offset_start, sizeof(uint64_t));
+
+		uint64_t index_size = filter_offset - index_offset;
 
 		std::string_view buffer(file_data + index_offset, index_size);
 

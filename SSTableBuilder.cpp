@@ -4,17 +4,9 @@ namespace lsm {
 
 
 	SSTableBuilder::SSTableBuilder(const std::string& filepath, BloomFilter& filter) : added(0), current_offset(0), filter(filter) {
-		file.open(filepath, std::ios::out | std::ios::trunc | std::ios::binary);
+		file = fopen(filepath.c_str(), "wb");
 
-		if (!file.is_open()) {
-			throw std::runtime_error("Unable to open " + filepath);
-		}
-	}
-
-	SSTableBuilder::~SSTableBuilder() {
-		if (file.is_open()) {
-			file.close();
-		}
+		if (file == NULL) throw std::runtime_error("Unable to open " + filepath);
 	}
 
 	void SSTableBuilder::flush(const SkipList& memtable) {
@@ -27,22 +19,11 @@ namespace lsm {
 
 	}
 
-	extern std::string encode(bool is_tombstone, const std::string& key, const std::string& val);
-	extern std::string encode(bool is_tombstone, const std::string_view key, const std::string_view val);
+	void SSTableBuilder::writeKeyOrVal(const std::string_view s) {
+		uint32_t length = s.size();
+		fwrite(reinterpret_cast<const char*>(&length), 1, sizeof(uint32_t), file);
 
-	void SSTableBuilder::writeEntry(bool is_tombstone, const std::string& key, const std::string& val) {
-		if (added == 0) {
-			index.emplace_back(key, current_offset);
-		}
-
-		std::string buffer = encode(is_tombstone, key, val);
-		file.write(buffer.data(), buffer.size());
-
-		filter.add(key);
-
-		current_offset += buffer.size();
-		++added;
-		if (added == INDEX_ENTRY_SIZE) {added = 0;}
+		fwrite(s.data(), 1, length, file);
 	}
 
 	void SSTableBuilder::writeEntry(bool is_tombstone, const std::string_view key, const std::string_view val) {
@@ -50,12 +31,19 @@ namespace lsm {
 			index.emplace_back(std::string(key), current_offset);
 		}
 
-		std::string buffer = encode(is_tombstone, key, val);
-		file.write(buffer.data(), buffer.size());
+		uint8_t tombstone = is_tombstone;
+		fwrite(reinterpret_cast<const char*>(&tombstone), 1, sizeof(uint8_t), file);
+
+		writeKeyOrVal(key);
+		current_offset += sizeof(uint8_t) + sizeof(uint32_t) + key.size();
+
+		if (!is_tombstone){
+			writeKeyOrVal(val);
+			current_offset += sizeof(uint32_t) + val.size();	
+		} 
 
 		filter.add(key);
 
-		current_offset += buffer.size();
 		++added;
 		if (added == INDEX_ENTRY_SIZE) {added = 0;}
 	}
@@ -65,18 +53,30 @@ namespace lsm {
 
 		for (auto& [key, offset] : index) {
 
-			uint32_t length = key.size();
-			file.write(reinterpret_cast<const char*> (&length), sizeof(uint32_t));
+			writeKeyOrVal(key);
 
-			file.write(key.data(), key.size());
+			fwrite(reinterpret_cast<const char*> (&offset), 1, sizeof(uint64_t), file);
 
-			file.write(reinterpret_cast<const char*> (&offset), sizeof(uint64_t));
+			current_offset += sizeof(uint32_t) + key.size() + sizeof(uint64_t);
 		}
 
-		file.write(reinterpret_cast<const char*> (&index_offset), sizeof(uint64_t));
+		const uint64_t* data = filter.getData();
+		const uint64_t num_elems = filter.getElems();
+		fwrite(data, sizeof(uint64_t), num_elems, file);
 
-		file.flush();
-		file.close();
+		uint64_t filter_offset = current_offset;
+
+		fwrite(reinterpret_cast<const char*> (&filter_offset), 1, sizeof(uint64_t), file);
+		fwrite(reinterpret_cast<const char*> (&index_offset), 1, sizeof(uint64_t), file);
+
+
+		fflush(file);
+
+		fcntl(fileno(file), F_FULLFSYNC);
+
+		fsync(fileno(file));
+
+		fclose(file);
 	}
 
 }

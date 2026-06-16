@@ -157,38 +157,56 @@ namespace lsm {
 
 		auto [h1, h2] = getHashes(key);
 
-		uint64_t mod_mask = hash_table.size() - 1;
+		uint64_t mod_mask = table_size - 1;
 		for (uint64_t i=0; i<num_hashes; ++i) {
 			uint64_t hash = static_cast<uint64_t>(h1) + i * static_cast<uint64_t>(h2);
 
 			hash = hash & mod_mask;
-			hash_table[static_cast<uint32_t>(hash)] = true;
+			set(static_cast<uint32_t>(hash));
 		}
 	}
 
-	void BloomFilter::add(const std::string_view key) {
+	void BloomFilter::add(const std::string_view& key) {
 
 		auto [h1, h2] = getHashes(key);
 
-		uint64_t mod_mask = hash_table.size() - 1;
+		uint64_t mod_mask = table_size - 1;
 		for (uint64_t i=0; i<num_hashes; ++i) {
 			uint64_t hash = static_cast<uint64_t>(h1) + i * static_cast<uint64_t>(h2);
 
 			hash = hash & mod_mask;
-			hash_table[static_cast<uint32_t>(hash)] = true;
+			set(static_cast<uint32_t>(hash));
 		}
 	}
 
 	bool BloomFilter::contains(uint32_t h1, uint32_t h2) const {
 
-		uint64_t mod_mask = hash_table.size() - 1;
+		uint64_t mod_mask = table_size - 1;
 		for (uint64_t i=0; i<num_hashes; ++i) {
 			uint64_t hash = static_cast<uint64_t>(h1) + i * static_cast<uint64_t>(h2);
 
 			hash = hash & mod_mask;
-			if (!hash_table[static_cast<uint32_t>(hash)]) {return false;}
+			if (!get(static_cast<uint32_t>(hash))) {return false;}
 		}
 		return true;
+	}
+
+	void BloomFilter::set(uint64_t i) {
+		uint64_t mask = static_cast<uint64_t>(1) << (i % word_size);
+		hash_table[i / word_size] |= mask;
+	}
+
+	bool BloomFilter::get(uint64_t i) const {
+		uint64_t mask = static_cast<uint64_t>(1) << (i % word_size);
+		return hash_table[i / word_size] & mask;
+	}
+
+	const uint64_t* BloomFilter::getData() const {
+		return hash_table.data();
+	}
+
+	const uint64_t BloomFilter::getElems() const {
+		return hash_table.size();
 	}
 
 }
