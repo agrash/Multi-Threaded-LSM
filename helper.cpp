@@ -201,12 +201,12 @@ namespace lsm {
 		return hash_table[i / word_size] & mask;
 	}
 
-	const uint64_t* BloomFilter::getData() const {
-		return hash_table.data();
+	std::vector<uint64_t>& BloomFilter::getTable() {
+		return hash_table;
 	}
 
-	const uint64_t BloomFilter::getElems() const {
-		return hash_table.size();
+	uint64_t BloomFilter::getElems() const {
+		return table_size;
 	}
 
 }

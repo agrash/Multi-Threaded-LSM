@@ -49,17 +49,14 @@ namespace lsm {
 		void set(uint64_t i);
 		bool get(uint64_t i) const;
 
-		const uint64_t* getData() const;
-		const uint64_t getElems() const;
+		std::vector<uint64_t>& getTable();
+		uint64_t getElems() const;
 	};
 
 	struct dataContainer {
 		bool is_tombstone;
-		std::string key;
-		std::string val;
-
-		dataContainer() {}
-		dataContainer(std::string key, std::string val, bool is_tombstone) : key(std::move(key)), val(std::move(val)), is_tombstone(is_tombstone) {}
+		std::string_view key;
+		std::string_view val;
 	};
 
 }

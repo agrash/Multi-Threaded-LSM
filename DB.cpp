@@ -62,7 +62,7 @@ namespace lsm {
 
 			{
 				std::unique_lock<std::shared_mutex> lock1(reader_level_locks[0]);
-				readers_at_level[0].emplace_back(std::make_unique<SSTableReader>(flush_name, new_filter));
+				readers_at_level[0].emplace_back(std::make_shared<SSTableReader>(flush_name, new_filter));
 			}
 
 
@@ -113,11 +113,11 @@ namespace lsm {
 
 				size_t num_files = COMPACTION_TRIGGER;
 
-				std::vector<std::string> file_paths;
+				std::vector<std::shared_ptr<SSTableReader>> files;
 				{
 					std::shared_lock<std::shared_mutex> lock(reader_level_locks[curr_level]);
 					for (size_t i=0; i<num_files; ++i) {
-						file_paths.push_back(readers_at_level[curr_level][i]->getFilePath());
+						files.push_back(readers_at_level[curr_level][i]);
 					}
 				}
 
@@ -127,11 +127,11 @@ namespace lsm {
 
 				const std::string merged_file_path = prefix + std::to_string(curr_level + 1) + "_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db"; // This line is safe to run without a lock.
 
-				SSTableMerger merge(remove_tombstones, file_paths, merged_file_path, new_filter); //Don't need locks for this. (Only compactor adds or remove bloom filters and the files are only made irrelevant by compactor.)	
+				SSTableMerger merge(remove_tombstones, files, merged_file_path, new_filter); //Don't need locks for this. (Only compactor adds or remove bloom filters and the files are only made irrelevant by compactor.)	
 
 				{
 					std::unique_lock<std::shared_mutex> lock1(reader_level_locks[curr_level + 1]);
-					readers_at_level[curr_level + 1].emplace_back(std::make_unique<SSTableReader>(merged_file_path, new_filter));
+					readers_at_level[curr_level + 1].emplace_back(std::make_shared<SSTableReader>(merged_file_path, new_filter));
 				}
 
 				{
@@ -164,9 +164,7 @@ namespace lsm {
 
 			if (!run_writer.load(std::memory_order_relaxed)) break;
 
-			auto& container = job.data;
-
-			insert(container.key, container.val, container.is_tombstone);
+			insert(job.key, job.val, job.tombstone);
 
 			// sequence number of jobs completed by writer always increases.
 			highest_write_completed.store(job.sequence_number, std::memory_order_relaxed);
@@ -231,7 +229,7 @@ namespace lsm {
 
 
 	void DB::put(const std::string& key, const std::string& val, bool tombstone) {
-		writeBufferElem job{ dataContainer(key, val, tombstone), 0 };
+		writeBufferElem job{ tombstone, key, val, 0 };
 
 		// going to update sequence number and highest write received inside the ring buffer.
 		writer_buffer.produce(job, job.sequence_number, highest_write_received); // need to put in lock to maintain the property that writer takes job in increasing order of sequence number.

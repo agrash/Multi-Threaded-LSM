@@ -10,12 +10,18 @@ namespace lsm {
 	SSTableReader::~SSTableReader() {
 		munmap(const_cast<char*>(file_data), file_size);
 
-		close(fd);
-
 		if (delete_file_at_destruction) std::filesystem::remove(filepath);
 	}
 
 	SSTableReader::SSTableReader(const std::string& filepath, BloomFilter& filter) : filepath(filepath), filter(std::move(filter)) {
+		mmapAndFillIndex();
+	}
+
+	SSTableReader::SSTableReader(const std::string& filepath) : filepath(filepath), filter(0, 0) {
+		mmapAndFillIndex();
+	}
+
+	void SSTableReader::mmapAndFillIndex() {
 		fd = open(filepath.c_str(), O_RDONLY);
 		if (fd == -1) throw std::runtime_error("Unable to open file " + filepath);
 
@@ -27,6 +33,8 @@ namespace lsm {
 		void* base = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
 		if (base == MAP_FAILED) throw std::runtime_error("Unable to map file " + filepath);
 
+		close(fd);
+
 		file_data = static_cast<const char*>(base);
 		madvise(base, file_size, MADV_RANDOM);
 
@@ -34,7 +42,6 @@ namespace lsm {
 		memcpy(&index_offset, file_data + index_offset_start, sizeof(uint64_t));
 
 		uint64_t filter_offset_start = index_offset_start - sizeof(uint64_t);
-		uint64_t filter_offset;
 		memcpy(&filter_offset, file_data + filter_offset_start, sizeof(uint64_t));
 
 		uint64_t index_size = filter_offset - index_offset;
@@ -113,6 +120,34 @@ namespace lsm {
 
 	std::string SSTableReader::getFilePath() {
 		return filepath;
+	}
+
+	std::optional<dataContainer> SSTableReader::getNext() {
+		if (current_offset >= index_offset) return std::nullopt;
+
+		dataContainer res;
+
+		uint8_t tombstone;
+		memcpy(&tombstone, file_data + current_offset, sizeof(uint8_t));
+		current_offset += sizeof(uint8_t);
+
+		res.is_tombstone = tombstone;
+
+		uint32_t key_length;
+		memcpy(&key_length, file_data + current_offset, sizeof(uint32_t));
+		current_offset += sizeof(uint32_t);
+		res.key = std::string_view(file_data + current_offset, key_length);
+		current_offset += key_length;
+
+		if (tombstone == 1) return res;
+
+		uint32_t val_length;
+		memcpy(&val_length, file_data + current_offset, sizeof(uint32_t));
+		current_offset += sizeof(uint32_t);
+		res.val = std::string_view(file_data + current_offset, val_length);
+		current_offset += val_length;
+
+		return res;
 	}
 
 }

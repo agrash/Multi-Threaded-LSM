@@ -16,7 +16,7 @@
 #include <array>
 
 namespace lsm {
-	//Important: Always lock readers before filters to avoid deadlocks.
+	//Important: Always lock readers before filters to avoid deadlocks. (Not relevant now)
 	//Important: Consider Recover to be non-functional.
 	// put and get are written to be capable of called by multiple threads but pipeline for receiving currently does not send the results back to those threads instead puts them in a single buffer to be collected.
 	// Number of writers (DB writers) = 1, Number of readers (DB readers) = NUM_READER_THREADS.
@@ -24,11 +24,13 @@ namespace lsm {
 	class DB {
 	private:
 		struct writeBufferElem {
-			dataContainer data;
+			bool tombstone;
+			std::string key;
+			std::string val;
 			uint64_t sequence_number;
 
 			writeBufferElem() {}
-			writeBufferElem(dataContainer data, uint64_t sequence_number) : data(std::move(data)), sequence_number(sequence_number) {}
+			writeBufferElem(bool tombstone, std::string key, std::string val, uint64_t sequence_number) : tombstone(tombstone), key(std::move(key)), val(std::move(val)), sequence_number(sequence_number) {}
 		};
 
 		/*struct readBufferElem {
@@ -63,7 +65,7 @@ namespace lsm {
 		std::atomic<uint64_t> highest_write_completed{0};
 
 		// need to tune them manually based on key-val sizes and required FP rate.
-		static constexpr size_t FLUSH_TRIGGER = 64 * 1024 * 1024;
+		static constexpr size_t FLUSH_TRIGGER = 4 * 1024 * 1024;
 		static constexpr size_t bloom_filter_size = FLUSH_TRIGGER / (8);  // Keep this a power of 2, if want to change it then need to change the mod logic in bloom filter.
 		const int num_hashes = 8;
 
@@ -94,7 +96,7 @@ namespace lsm {
 		const std::string prefix = "./Tables/sstable";
 		std::atomic<int> sstable_counter = 0; // to use only by a single writer thread.
 
-		std::vector<std::vector<std::unique_ptr<SSTableReader>>> readers_at_level;
+		std::vector<std::vector<std::shared_ptr<SSTableReader>>> readers_at_level;
 		std::vector<std::shared_mutex> reader_level_locks;
 
 		void checkAndHandleFlush();

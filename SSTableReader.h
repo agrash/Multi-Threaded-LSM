@@ -21,6 +21,8 @@ namespace lsm {
 		BloomFilter filter;
 
 		uint64_t index_offset;
+		uint64_t filter_offset;
+		uint64_t current_offset = 0;
 
 		std::vector<Bookmark> index;
 
@@ -28,6 +30,9 @@ namespace lsm {
 
 	public:
 		SSTableReader(const std::string& filepath, BloomFilter& filter);
+		SSTableReader(const std::string& filepath);
+
+		void mmapAndFillIndex();
 
 		~SSTableReader();
 		std::optional<std::string> findKey(const std::string& key, uint32_t h1, uint32_t h2);
@@ -35,6 +40,7 @@ namespace lsm {
 		void preserveTable();
 
 		std::string getFilePath();
+		std::optional<dataContainer> getNext();
 	};
 
 }

@@ -60,9 +60,8 @@ namespace lsm {
 			current_offset += sizeof(uint32_t) + key.size() + sizeof(uint64_t);
 		}
 
-		const uint64_t* data = filter.getData();
-		const uint64_t num_elems = filter.getElems();
-		fwrite(data, sizeof(uint64_t), num_elems, file);
+		auto hash_table = filter.getTable();
+		fwrite(hash_table.data(), sizeof(uint64_t), hash_table.size(), file);
 
 		uint64_t filter_offset = current_offset;
 
