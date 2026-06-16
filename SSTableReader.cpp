@@ -13,12 +13,27 @@ namespace lsm {
 		if (delete_file_at_destruction) std::filesystem::remove(filepath);
 	}
 
-	SSTableReader::SSTableReader(const std::string& filepath, BloomFilter& filter) : filepath(filepath), filter(std::move(filter)) {
+	SSTableReader::SSTableReader(const std::string& filepath, BloomFilter& filter) : filepath(filepath), filter(std::make_unique<BloomFilter>(std::move(filter))) {
 		mmapAndFillIndex();
 	}
 
-	SSTableReader::SSTableReader(const std::string& filepath) : filepath(filepath), filter(0, 0) {
+	SSTableReader::SSTableReader(const std::string& filepath, const int num_hashes) : filepath(filepath) {
 		mmapAndFillIndex();
+
+		uint64_t filter_end_offset = file_size - 2 * sizeof(uint64_t);
+		uint64_t filter_size = (filter_end_offset - filter_offset) * 8;
+
+		filter = std::make_unique<BloomFilter>(filter_size * 8, num_hashes);
+
+		auto hash_table = filter->getTable();
+		uint64_t offset = filter_offset;
+
+		uint64_t idx = 0;
+		while (offset < filter_end_offset) {
+			memcpy(&hash_table[idx], file_data + offset, sizeof(uint64_t));
+			offset += sizeof(uint64_t);
+			++idx;
+		}
 	}
 
 	void SSTableReader::mmapAndFillIndex() {
@@ -69,7 +84,7 @@ namespace lsm {
 
 	std::optional<std::string> SSTableReader::findKey(const std::string& key, uint32_t h1, uint32_t h2) {
 
-		if (!filter.contains(h1, h2)) return std::nullopt;
+		if (!filter->contains(h1, h2)) return std::nullopt;
 
 		Bookmark dummy(key, 0);
 		int idx = upper_bound(index.begin(), index.end(), dummy) - index.begin() - 1;

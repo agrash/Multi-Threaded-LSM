@@ -60,18 +60,17 @@ namespace lsm {
 			current_offset += sizeof(uint32_t) + key.size() + sizeof(uint64_t);
 		}
 
+		uint64_t filter_offset = current_offset;
+
 		auto hash_table = filter.getTable();
 		fwrite(hash_table.data(), sizeof(uint64_t), hash_table.size(), file);
-
-		uint64_t filter_offset = current_offset;
 
 		fwrite(reinterpret_cast<const char*> (&filter_offset), 1, sizeof(uint64_t), file);
 		fwrite(reinterpret_cast<const char*> (&index_offset), 1, sizeof(uint64_t), file);
 
-
-		fflush(file);
-
 		fcntl(fileno(file), F_FULLFSYNC);
+		
+		fflush(file);
 
 		fsync(fileno(file));
 

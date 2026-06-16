@@ -43,7 +43,10 @@ namespace lsm {
 			readBufferElem(std::string key, std::optional<std::string>* result_container, std::binary_semaphore* signal_done, uint64_t highest_write) : key(std::move(key)), result_container(result_container), signal_done(signal_done), highest_write(highest_write) {}
 		};*/
 
-		WAL wal_log;
+		const std::string wal_dir = "./Logs";
+		std::array<WAL, 2> wal_log{wal_dir, wal_dir};
+		uint64_t wal_log_counter = 1;
+
 		std::array<SkipList, 2> memtable;
 		int active = 0;
 

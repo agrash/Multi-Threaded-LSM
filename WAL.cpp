@@ -2,33 +2,50 @@
 
 namespace lsm {
 
-	WAL::WAL(const std::string& path) : filepath(path) {
-		file.open(path, std::ios::out | std::ios::app | std::ios::binary);
-		if (!file.is_open()) {
-			throw std::runtime_error("Unable to open file " + path);
-		}
+	WAL::WAL(const std::string& dir) : dir(dir) {
+		file = NULL;
 	}
 
 	WAL::~WAL() {
-		if (file.is_open()) {
-			file.close();
-		}
+		flush();
+		fclose(file);
 	}
 
-	extern std::string encode(bool is_tombstone, const std::string& key, const std::string& val);
+	void WAL::open(const uint64_t log_number) {
+		filepath = dir + "/wal_" + std::to_string(log_number) + ".log";
+		file = fopen(filepath.c_str(), "wb");
+
+		if (file == NULL) throw std::runtime_error("Unable to open file " + filepath);
+
+		fcntl(fileno(file), F_FULLFSYNC);
+	}
+
+	void WAL::writeKeyOrVal(const std::string_view s) {
+		uint32_t length = s.size();
+		fwrite(reinterpret_cast<const char*>(&length), 1, sizeof(uint32_t), file);
+
+		fwrite(s.data(), 1, length, file);
+	}
 
 	void WAL::append(bool is_tombstone, const std::string& key, const std::string& val) {
-		auto buffer = encode(is_tombstone, key, val);
-		file.write(buffer.data(), buffer.size());
+		uint8_t tombstone = is_tombstone;
+		fwrite(reinterpret_cast<const char*>(&tombstone), 1, sizeof(uint8_t), file);
+
+		writeKeyOrVal(key);
+
+		if (!is_tombstone) writeKeyOrVal(val);
 	}
 
 	void WAL::flush() {
-		file.flush();
+		if (file != NULL) {
+			fflush(file);
+			fsync(fileno(file));
+		}
 	}
 
 	extern bool decode(std::ifstream& infile, bool& is_tombstone, std::string& key, std::string& val);
 
-	void WAL::recover(SkipList& memtable) {
+	void WAL::recover(SkipList& memtable, const std::string& filepath) {
 		std::ifstream infile(filepath, std::ios::in | std::ios::binary);
 		if (!infile.is_open()) {return;}
 
@@ -47,8 +64,10 @@ namespace lsm {
 	}
 
 	void WAL::clear() {
-		file.close();
-		file.open(filepath, std::ios::out | std::ios::trunc | std::ios::binary);
+		if (file != NULL) {
+			fclose(file);
+			std::filesystem::remove(filepath);
+		}
 	}
 
 }

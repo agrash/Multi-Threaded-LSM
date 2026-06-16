@@ -2,10 +2,11 @@
 
 namespace lsm {
 
-	DB::DB() : wal_log("wal.log"), readers_at_level(MAX_LEVEL + 1), reader_level_locks(MAX_LEVEL + 1) {
+	DB::DB() : readers_at_level(MAX_LEVEL + 1), reader_level_locks(MAX_LEVEL + 1) {
 		compactor_thread = std::thread(&DB::compactor, this);
 		flush_thread = std::thread(&DB::memtableFlush, this);
 
+		wal_log[active].open(0);
 		writer_thread = std::thread(&DB::writer, this);
 
 		//for (auto& thread : reader_threads) thread = std::thread(&DB::reader, this);
@@ -222,7 +223,8 @@ namespace lsm {
 				}
 
 				start_flush.release();
-				wal_log.clear(); // This is not how WAL should work but am leaving it like this for now.
+				wal_log[active].clear();
+				wal_log[active].open(wal_log_counter++);
 			}
 		}
 	}
@@ -271,7 +273,7 @@ namespace lsm {
 	}
 
 	void DB::insert(std::string& key, std::string& val, bool tombstone) {
-		wal_log.append(tombstone, key, val);
+		wal_log[active].append(tombstone, key, val);
 
 		{
 			std::shared_lock<std::shared_mutex> lock1(active_lock); // Can probably remove this lock.
@@ -333,7 +335,7 @@ namespace lsm {
 	void DB::recover() {
 		std::shared_lock<std::shared_mutex> lock1(active_lock);
 		std::unique_lock<std::shared_mutex> lock2(active_memtable_lock);
-		wal_log.recover(memtable[active]);
+		wal_log[active].recover(memtable[active], "");
 	}
 
 

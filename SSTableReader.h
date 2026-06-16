@@ -18,7 +18,7 @@ namespace lsm {
 		const char* file_data;
 		uint64_t file_size;
 
-		BloomFilter filter;
+		std::unique_ptr<BloomFilter> filter;
 
 		uint64_t index_offset;
 		uint64_t filter_offset;
@@ -30,7 +30,7 @@ namespace lsm {
 
 	public:
 		SSTableReader(const std::string& filepath, BloomFilter& filter);
-		SSTableReader(const std::string& filepath);
+		SSTableReader(const std::string& filepath, const int num_hashes);
 
 		void mmapAndFillIndex();
 

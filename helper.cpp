@@ -205,8 +205,4 @@ namespace lsm {
 		return hash_table;
 	}
 
-	uint64_t BloomFilter::getElems() const {
-		return table_size;
-	}
-
 }

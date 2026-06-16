@@ -40,7 +40,7 @@ namespace lsm {
 
 		static constexpr uint64_t word_size = sizeof(uint64_t) * 8;
 	public:
-		BloomFilter(uint64_t size, int num_hashes) : table_size(size), hash_table(size / word_size + 1), num_hashes(num_hashes) {}
+		BloomFilter(uint64_t size, int num_hashes) : table_size(size), hash_table(size / word_size), num_hashes(num_hashes) {}
 
 		void add(const std::string& key);
 		void add(const std::string_view& key);
@@ -50,7 +50,6 @@ namespace lsm {
 		bool get(uint64_t i) const;
 
 		std::vector<uint64_t>& getTable();
-		uint64_t getElems() const;
 	};
 
 	struct dataContainer {
