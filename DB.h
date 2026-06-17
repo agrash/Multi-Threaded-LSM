@@ -73,7 +73,7 @@ namespace lsm {
 		// need to tune them manually based on key-val sizes and required FP rate.
 		static constexpr size_t FLUSH_TRIGGER = 64 * 1024 * 1024;
 		static constexpr size_t bloom_filter_size = FLUSH_TRIGGER / (8);  // Keep this a power of 2, if want to change it then need to change the mod logic in bloom filter.
-		const int num_hashes = 8;
+		static constexpr int num_hashes = 8;
 
 		static constexpr size_t COMPACTION_TRIGGER = 4; // Merge after reaching this many files on a level. Keep this a power of 2 as well or change bloom filter mod logic.
 		static constexpr size_t MAX_LEVEL = 7;
@@ -107,13 +107,13 @@ namespace lsm {
 		//std::array<std::thread, NUM_READER_THREADS> reader_threads;
 
 
-		const std::string prefix = "./Tables/sstable";
+		const std::string sstable_dir = "./Tables";
 		std::atomic<int> sstable_counter = 0; // to use only by a single writer / compactor thread.
 
 		//std::vector<std::vector<std::shared_ptr<SSTableReader>>> readers_at_level;
 		//std::vector<std::shared_mutex> reader_level_locks;
 
-		void checkAndHandleFlush();
+		void checkAndHandleFlush(bool overloaded = false);
 		void memtableFlush();
 
 		void compactor();
@@ -130,7 +130,7 @@ namespace lsm {
 
 
 	public:
-		DB();
+		DB(bool recoveryMode = false);
 		~DB();
 
 		void put(const std::string& key, const std::string& val, bool tombstone = false);

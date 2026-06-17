@@ -42,6 +42,7 @@ namespace lsm {
 		}
 	}
 
+
 	extern bool decode(std::ifstream& infile, bool& is_tombstone, std::string& key, std::string& val);
 
 	void WAL::recover(SkipList& memtable, const std::string& filepath) {
@@ -60,6 +61,9 @@ namespace lsm {
 		}
 
 		infile.close();
+
+		file = fopen(filepath.c_str(), "ab");
+		if (file == NULL) throw std::runtime_error("Unable to open " + filepath + " in recovery mode.");
 	}
 
 	void WAL::clear() {

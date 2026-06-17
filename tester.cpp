@@ -309,6 +309,64 @@ void streaming_test(uint64_t n, int num_threads) {
 	}
 }
 
+void recovery_test(uint64_t n, int num_threads) {
+	cout<<"Recovery test: n = "<<n<<", read_threads = "<<num_threads<<", seed = "<<HARNESS_SEED<<endl;
+	DB database(true);
+
+	// j * mult must not overflow: j < n and mult ~2^31.5, safe for n up to ~2^32.
+	const uint64_t write_mult = coprimeMultiplier(n, 2654435761ULL);
+	const uint64_t read_mult = coprimeMultiplier(n, write_mult + 1000003ULL);
+
+	
+	auto start = std::chrono::high_resolution_clock::now();
+	database.get(make_key(0));
+	auto end = std::chrono::high_resolution_clock::now();
+	auto drain_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	cout<<"Recovery drain duration: "<<drain_ms<<" ms"<<endl;
+
+	//auto applied_ms = max<long long>(enqueue_ms + drain_ms, 1);
+
+	start = std::chrono::high_resolution_clock::now();
+
+	atomic<uint64_t> failures{0};
+	vector<thread> threads;
+
+
+	for (int t=0; t<num_threads; ++t) {
+		uint64_t lo = n * t / num_threads;
+		uint64_t hi = n * (t+1) / num_threads;
+
+		threads.emplace_back([&database, &failures, lo, hi, n, read_mult]() {
+			uint64_t local_failures = 0;
+			for (uint64_t j=lo; j<hi; ++j) {
+				uint64_t i = (j * read_mult) % n;
+				auto res = database.get(make_key(i));
+
+				if (is_removed(i)) {
+					if (res && *res != "") ++local_failures;          // deleted key came back
+				}
+				else {
+					if (!res || *res != make_val(i)) ++local_failures; // lost or wrong value
+				}
+			}
+			failures.fetch_add(local_failures);
+		});
+	}
+	for (auto& t : threads) t.join();
+
+	end = std::chrono::high_resolution_clock::now();
+	auto read_ms = max<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count(), 1);
+
+	cout<<"Read+verify duration: "<<read_ms<<" ms ("<<(uint64_t)(n * 1000.0 / read_ms)<<" ops/s)"<<endl;
+
+	if (failures == 0) {
+		cout<<"All Clear!!!"<<endl;
+	}
+	else {
+		cout<<failures<<" verification failures!"<<endl;
+	}
+}
+
 int main(int argc, char* argv[]) {
 	uint64_t n = 1000000;
 	if (argc > 1) {
@@ -322,8 +380,12 @@ int main(int argc, char* argv[]) {
 	int read_threads = 20;
 	if (argc > 2) read_threads = atoi(argv[2]);
 
-	streaming_test(n, read_threads);
-	//materialized_test();
+	int test_num = 0;
+	if (argc > 3) test_num = atoi(argv[3]);
+
+	if (test_num == 0) streaming_test(n, read_threads);
+	else if (test_num == 1) recovery_test(n, read_threads);
+	else materialized_test();
 
 	return 0;
 }

@@ -2,12 +2,16 @@
 
 namespace lsm {
 
-	DB::DB() : readers_at_level(MAX_LEVEL + 1, std::make_shared<LevelReaders>()) {
+	DB::DB(bool recoveryMode) {
+		for (size_t i=0; i<=MAX_LEVEL; ++i) readers_at_level.push_back(std::make_shared<LevelReaders>());
+
 		compactor_thread = std::thread(&DB::compactor, this);
 		compactor_threadv2 = std::thread(&DB::compactorv2, this);
 		flush_thread = std::thread(&DB::memtableFlush, this);
 
-		wal_log[active].open(0);
+		if (recoveryMode) recover();
+		else wal_log[active].open(0);
+
 		writer_thread = std::thread(&DB::writer, this);
 
 		//for (auto& thread : reader_threads) thread = std::thread(&DB::reader, this);
@@ -59,12 +63,14 @@ namespace lsm {
 		while (run_memtable_flusher.load(std::memory_order_relaxed)) {
 			start_flush.acquire();
 
+			if (!run_memtable_flusher.load(std::memory_order_relaxed)) break;
+
 
 			std::cout<<"Trigerring Flush!"<<std::endl;
 
 			BloomFilter new_filter(bloom_filter_size, num_hashes);
 
-			const std::string flush_name = prefix + "0_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db";
+			const std::string flush_name = sstable_dir + "/sstable0_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db";
 
 			SSTableBuilder builder(flush_name, new_filter);
 			builder.flush(memtable[1 - active]); 
@@ -83,6 +89,8 @@ namespace lsm {
 				std::unique_lock<std::shared_mutex> lock(inactive_memtable_lock);
 				memtable[1 - active].clear(); 
 			}
+
+			wal_log[1 - active].clear();
 
 			{
 				std::unique_lock<std::mutex> lock(writer_flusher);
@@ -109,6 +117,8 @@ namespace lsm {
 		while (run_compactor.load(std::memory_order_relaxed)) {
 			start_compactor.acquire();
 
+			if (!run_compactor.load(std::memory_order_relaxed)) break;
+
 			size_t curr_level = 0;
 			size_t filter_size = COMPACTION_TRIGGER	* bloom_filter_size;
 
@@ -134,11 +144,11 @@ namespace lsm {
 					}
 				}
 
-				bool remove_tombstones = (curr_level == curr_max_level);
+				bool remove_tombstones = (curr_level == curr_max_level.load(std::memory_order_relaxed));
 
 				BloomFilter new_filter(filter_size, num_hashes);
 
-				const std::string merged_file_path = prefix + std::to_string(curr_level + 1) + "_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db"; // This line is safe to run without a lock.
+				const std::string merged_file_path = sstable_dir + "/sstable" + std::to_string(curr_level + 1) + "_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db"; // This line is safe to run without a lock.
 
 				SSTableMerger merge(remove_tombstones, files, merged_file_path, new_filter); //Don't need locks for this. (Only compactor adds or remove bloom filters and the files are only made irrelevant by compactor.)	
 
@@ -177,7 +187,7 @@ namespace lsm {
 
 				filter_size *= COMPACTION_TRIGGER;
 				++curr_level;
-				if (curr_level > curr_max_level) { curr_max_level = curr_level; }
+				if (curr_level > curr_max_level.load(std::memory_order_acquire)) { curr_max_level.store(curr_level, std::memory_order_release); }
 
 				if (curr_level == SECOND_COMPACTOR_LEVEL) {
 					std::unique_lock<std::mutex> lock(compactor_lock);
@@ -199,6 +209,8 @@ namespace lsm {
 	void DB::compactorv2() {
 		while (run_compactorv2.load(std::memory_order_relaxed)) {
 			start_compactorv2.acquire();
+
+			if (!run_compactorv2.load(std::memory_order_relaxed)) break;
 
 			size_t curr_level = SECOND_COMPACTOR_LEVEL;
 			size_t filter_size = COMPACTION_TRIGGER	* bloom_filter_size_second_compactor;
@@ -225,11 +237,11 @@ namespace lsm {
 					}
 				}
 
-				bool remove_tombstones = (curr_level == curr_max_level);
+				bool remove_tombstones = (curr_level == curr_max_level.load(std::memory_order_relaxed));
 
 				BloomFilter new_filter(filter_size, num_hashes);
 
-				const std::string merged_file_path = prefix + std::to_string(curr_level + 1) + "_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db"; // This line is safe to run without a lock.
+				const std::string merged_file_path = sstable_dir + "/sstable" + std::to_string(curr_level + 1) + "_" + std::to_string(sstable_counter.fetch_add(1, std::memory_order_relaxed)) + ".db"; // This line is safe to run without a lock.
 
 				SSTableMerger merge(remove_tombstones, files, merged_file_path, new_filter); //Don't need locks for this. (Only compactor adds or remove bloom filters and the files are only made irrelevant by compactor.)	
 
@@ -259,7 +271,7 @@ namespace lsm {
 
 				filter_size *= COMPACTION_TRIGGER;
 				++curr_level;
-				if (curr_level > curr_max_level) { curr_max_level = curr_level; }
+				if (curr_level > curr_max_level.load(std::memory_order_acquire)) { curr_max_level.store(curr_level, std::memory_order_release); }
 
 				continue_compaction = readers_at_level[curr_level]->size() >= COMPACTION_TRIGGER;
 
@@ -322,11 +334,11 @@ namespace lsm {
 		std::cout<<"Stopped a Reader\n";
 	}*/
 
-	void DB::checkAndHandleFlush() {
+	void DB::checkAndHandleFlush(bool overloaded) {
 		{
 			//Don't need active lock as only this thread can change the value of active.
-			if (memtable[active].getSizeBytes() >= FLUSH_TRIGGER) {
-				wal_log[active].flush();
+			if (memtable[active].getSizeBytes() >= FLUSH_TRIGGER || overloaded) {
+				if (!overloaded) wal_log[active].flush();
 
 				bool wait = false;
 				{
@@ -348,8 +360,7 @@ namespace lsm {
 
 				start_flush.release();
 
-				wal_log[active].clear();
-				wal_log[active].open(wal_log_counter++);
+				wal_log[active].open(wal_log_counter++); // inactive wal_log would be cleared by flusher.
 			}
 		}
 	}
@@ -458,9 +469,91 @@ namespace lsm {
 
 
 	void DB::recover() {
-		std::shared_lock<std::shared_mutex> lock1(active_lock);
-		std::unique_lock<std::shared_mutex> lock2(active_memtable_lock);
-		wal_log[active].recover(memtable[active], "");
+		if (!std::filesystem::exists(wal_dir) || !std::filesystem::is_directory(wal_dir)) throw std::runtime_error(wal_dir + " does not exists to recover WAL.");
+		if (!std::filesystem::exists(sstable_dir) || !std::filesystem::is_directory(sstable_dir)) throw std::runtime_error(sstable_dir + " does not exists to recover SSTables.");
+
+		auto parseNumber = [](const std::string& s, size_t& ptr) {
+			size_t num = 0;
+			bool digit_found = false;
+			for (; ptr<s.size(); ++ptr) {
+				if (isdigit(s[ptr])) {
+					num *= 10;
+					num += s[ptr] - '0';
+					digit_found = true;
+				}
+				else if (digit_found) break;
+			}
+
+			return num;
+		};
+
+		struct table {
+			size_t level;
+			size_t num;
+			std::filesystem::path path;
+
+			bool operator<(const table& other) const {
+				if (level != other.level) return level < other.level;
+				return num < other.num;
+			}
+		};
+
+		std::vector<table> sstables;
+		for (const auto& entry : std::filesystem::directory_iterator(sstable_dir)) {
+			if (entry.path().filename().string().starts_with("sstable")) {
+				size_t ptr = 0;
+				const auto s = entry.path().filename().string();
+				size_t level = parseNumber(s, ptr);
+				size_t num = parseNumber(s, ptr);
+				sstables.emplace_back(level, num, entry.path());
+			}
+		}
+
+		sort(sstables.begin(), sstables.end());
+
+		size_t level = 0;
+		size_t max_counter = 0;
+		auto curr = atomic_load_explicit(&readers_at_level[level], std::memory_order_acquire);
+		for (const auto& t : sstables) {
+			if (t.level > level) {
+				atomic_store_explicit(&readers_at_level[level], curr, std::memory_order_release);
+				level = t.level;
+				curr = atomic_load_explicit(&readers_at_level[level], std::memory_order_acquire);
+			}
+
+			max_counter = std::max(t.num, max_counter);
+			curr->emplace_back(std::make_shared<SSTableReader>(t.path, num_hashes));
+		}
+		sstable_counter.store(max_counter, std::memory_order_release);
+		curr_max_level.store(level, std::memory_order_release);
+
+		atomic_store_explicit(&readers_at_level[level], curr, std::memory_order_release);
+
+
+		std::vector<std::filesystem::path> wal_files;
+		for (const auto& entry : std::filesystem::directory_iterator(wal_dir)) {
+			if (entry.path().filename().string().starts_with("wal")) wal_files.push_back(entry.path());
+		}
+		if (wal_files.size() > 2) throw std::runtime_error("Cannot recover more than 2 wal logs exists in " + wal_dir);
+
+		sort(wal_files.begin(), wal_files.end());
+		if (wal_files.size() == 1) {
+			wal_log[active].recover(memtable[active], wal_files[0]);
+			const auto s = wal_files[0].stem().string();
+			size_t ptr = 0;
+			wal_log_counter = parseNumber(s, ptr) + 1;
+		}
+		else {
+			wal_log[active].recover(memtable[active], wal_files[0]);
+			checkAndHandleFlush(true);
+			wal_log[active].recover(memtable[active], wal_files[1]);
+			const auto s = wal_files[1].stem().string();
+			size_t ptr = 0;
+			wal_log_counter = parseNumber(s, ptr) + 1;
+		}
+
+		std::cout<<"Recovery Completed\n";
+
 	}
 
 

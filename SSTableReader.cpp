@@ -23,9 +23,9 @@ namespace lsm {
 		uint64_t filter_end_offset = file_size - 2 * sizeof(uint64_t);
 		uint64_t filter_size = (filter_end_offset - filter_offset) * 8;
 
-		filter = std::make_unique<BloomFilter>(filter_size * 8, num_hashes);
+		filter = std::make_unique<BloomFilter>(filter_size, num_hashes);
 
-		auto hash_table = filter->getTable();
+		auto& hash_table = filter->getTable();
 		uint64_t offset = filter_offset;
 
 		uint64_t idx = 0;
