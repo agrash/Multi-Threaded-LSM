@@ -79,17 +79,16 @@ namespace lsm {
 		static constexpr size_t MAX_LEVEL = 7;
 		std::atomic<size_t> curr_max_level = 0; // to use only by compactor
 
-		std::thread compactor_thread;
-		std::atomic<bool> run_compactor{true};
-		std::binary_semaphore start_compactor{0};
-
-		std::thread compactor_threadv2;
-		std::atomic<bool> run_compactorv2{true};
-		std::binary_semaphore start_compactorv2{0};
-
-		std::mutex compactor_lock;
-		static constexpr size_t bloom_filter_size_second_compactor = bloom_filter_size * COMPACTION_TRIGGER * COMPACTION_TRIGGER;
-		static constexpr size_t SECOND_COMPACTOR_LEVEL = 2;
+		static constexpr size_t num_compactors = 3;
+		std::array<std::thread, num_compactors> compactor_threads;
+		std::array<std::atomic<bool>, num_compactors> run_compactor;
+		std::array<std::binary_semaphore, num_compactors + 1> start_compactor = {
+			std::binary_semaphore{0},
+			std::binary_semaphore{0},
+			std::binary_semaphore{0},
+			std::binary_semaphore{0}
+		};
+		std::array<std::mutex, num_compactors + 1> compactor_locks;
 
 		std::thread flush_thread;
 		std::atomic<bool> run_memtable_flusher{true};
@@ -116,8 +115,7 @@ namespace lsm {
 		void checkAndHandleFlush(bool overloaded = false);
 		void memtableFlush();
 
-		void compactor();
-		void compactorv2();
+		void compactor(std::atomic<bool>& run_compactor, std::binary_semaphore& start_compactor, std::binary_semaphore& next_compactor, std::mutex& low_level_mutex, std::mutex& high_level_mutex, size_t lower_level, size_t higher_level, uint64_t bloom_filter_size);
 
 		void writer();
 		void reader();
