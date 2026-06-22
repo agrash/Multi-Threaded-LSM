@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <atomic>
 #include <numeric>
+#include <array>
 #include <cstdlib>
 #include "DB.h"
 using namespace std;
@@ -367,6 +368,124 @@ void recovery_test(uint64_t n, int num_threads) {
 	}
 }
 
+// floor(log2(ns)); bucket b spans [2^b, 2^(b+1)) ns. Bucket 0 also absorbs ns==0.
+static inline int log2_bucket(uint64_t ns) {
+	if (ns == 0) return 0;
+	return 63 - __builtin_clzll(ns);
+}
+
+// Latency probe over recovered (cold) tables. Reports unloaded QD1 per-lookup
+// service time (exact percentiles from a sorted sample) and loaded QDnum_threads
+// percentiles (per-thread log2 histogram), alongside aggregate throughput.
+void latency_test(uint64_t n, int num_threads) {
+	cout<<"Latency test (recovered cold tables): n = "<<n<<", read_threads = "<<num_threads<<", seed = "<<HARNESS_SEED<<endl;
+	DB database(true);
+
+	const uint64_t write_mult = coprimeMultiplier(n, 2654435761ULL);
+	const uint64_t read_mult = coprimeMultiplier(n, write_mult + 1000003ULL);
+
+	// Drain barrier (also applies any inactive memtable recovered from the WAL).
+	auto barrier_start = std::chrono::high_resolution_clock::now();
+	database.get(make_key(0));
+	auto barrier_end = std::chrono::high_resolution_clock::now();
+	cout<<"Recovery drain duration: "<<std::chrono::duration_cast<std::chrono::milliseconds>(barrier_end - barrier_start).count()<<" ms"<<endl;
+
+	// ---- QD1 unloaded probe: single thread, exact percentiles from a sorted sample ----
+	{
+		const uint64_t samples = std::min<uint64_t>(n, 1000000ULL);
+		std::vector<uint64_t> lat;
+		lat.reserve(samples);
+		uint64_t failures = 0;
+
+		for (uint64_t j=0; j<samples; ++j) {
+			uint64_t i = (j * read_mult) % n;
+			std::string key = make_key(i);
+
+			auto t0 = std::chrono::steady_clock::now();
+			auto res = database.get(key);
+			auto t1 = std::chrono::steady_clock::now();
+			lat.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+
+			if (is_removed(i)) { if (res && *res != "") ++failures; }
+			else { if (!res || *res != make_val(i)) ++failures; }
+		}
+
+		std::sort(lat.begin(), lat.end());
+		long double sum = std::accumulate(lat.begin(), lat.end(), (long double)0);
+		auto pct = [&](double p) { return lat[std::min<size_t>(lat.size()-1, (size_t)(p * lat.size()))]; };
+
+		cout<<"--- QD1 unloaded ("<<samples<<" cold gets) ---"<<endl;
+		cout<<"mean "<<(uint64_t)(sum / lat.size())<<" ns | p50 "<<pct(0.50)<<" | p90 "<<pct(0.90)
+		    <<" | p99 "<<pct(0.99)<<" | p999 "<<pct(0.999)<<" | max "<<lat.back()<<" ns"<<endl;
+		cout<<"QD1 throughput: "<<(uint64_t)(1e9 * lat.size() / (double)sum)<<" ops/s";
+		if (failures) cout<<"  ("<<failures<<" verify failures)";
+		cout<<endl;
+	}
+
+	// ---- Loaded probe: num_threads concurrent gets, per-thread log2 latency histogram ----
+	{
+		std::vector<std::array<uint64_t,64>> hists(num_threads);
+		for (auto& h : hists) h.fill(0);
+		std::atomic<uint64_t> failures{0};
+		std::vector<std::thread> threads;
+
+		auto start = std::chrono::high_resolution_clock::now();
+		for (int t=0; t<num_threads; ++t) {
+			uint64_t lo = n * t / num_threads;
+			uint64_t hi = n * (t+1) / num_threads;
+
+			threads.emplace_back([&database, &failures, &hists, t, lo, hi, n, read_mult]() {
+				auto& h = hists[t];
+				uint64_t local_failures = 0;
+				for (uint64_t j=lo; j<hi; ++j) {
+					uint64_t i = (j * read_mult) % n;
+					std::string key = make_key(i);
+
+					auto t0 = std::chrono::steady_clock::now();
+					auto res = database.get(key);
+					auto t1 = std::chrono::steady_clock::now();
+					++h[log2_bucket(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count())];
+
+					if (is_removed(i)) { if (res && *res != "") ++local_failures; }
+					else { if (!res || *res != make_val(i)) ++local_failures; }
+				}
+				failures.fetch_add(local_failures);
+			});
+		}
+		for (auto& t : threads) t.join();
+		auto end = std::chrono::high_resolution_clock::now();
+		auto read_ms = max<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count(), 1);
+
+		std::array<uint64_t,64> all; all.fill(0);
+		uint64_t total = 0;
+		for (auto& h : hists) for (int b=0; b<64; ++b) { all[b] += h[b]; total += h[b]; }
+
+		auto hist_pct = [&](double p) -> std::string {
+			uint64_t target = (uint64_t)(p * total), cum = 0;
+			for (int b=0; b<64; ++b) {
+				cum += all[b];
+				if (cum >= target) {
+					uint64_t lo_ns = (b == 0) ? 0 : (1ULL << b);
+					return std::to_string(lo_ns/1000) + "-" + std::to_string((1ULL << (b+1))/1000) + " us";
+				}
+			}
+			return std::string("overflow");
+		};
+
+		cout<<"--- Loaded QD"<<num_threads<<" ---"<<endl;
+		cout<<"Read+verify duration: "<<read_ms<<" ms ("<<(uint64_t)(n * 1000.0 / read_ms)<<" ops/s)"<<endl;
+		cout<<"latency p50 "<<hist_pct(0.50)<<" | p90 "<<hist_pct(0.90)<<" | p99 "<<hist_pct(0.99)<<" | p999 "<<hist_pct(0.999)<<endl;
+		cout<<"log2 histogram [lo,hi) ns -> count:"<<endl;
+		for (int b=0; b<64; ++b) if (all[b]) {
+			uint64_t lo_ns = (b == 0) ? 0 : (1ULL << b);
+			cout<<"  ["<<lo_ns<<","<<(1ULL << (b+1))<<") : "<<all[b]<<endl;
+		}
+
+		if (failures == 0) cout<<"All Clear!!!"<<endl;
+		else cout<<failures<<" verification failures!"<<endl;
+	}
+}
+
 int main(int argc, char* argv[]) {
 	uint64_t n = 1000000;
 	if (argc > 1) {
@@ -385,6 +504,7 @@ int main(int argc, char* argv[]) {
 
 	if (test_num == 0) streaming_test(n, read_threads);
 	else if (test_num == 1) recovery_test(n, read_threads);
+	else if (test_num == 3) latency_test(n, read_threads);
 	else materialized_test();
 
 	return 0;

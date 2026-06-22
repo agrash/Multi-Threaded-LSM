@@ -11,9 +11,9 @@ namespace lsm {
 		uint64_t filter_size = bloom_filter_size;
 		compactor_threads[0] = std::thread(&DB::compactor, this, std::ref(run_compactor[0]), std::ref(start_compactor[0]), std::ref(start_compactor[1]), std::ref(compactor_locks[0]), std::ref(compactor_locks[1]), 0, 1, filter_size);
 		filter_size *= COMPACTION_TRIGGER;
-		compactor_threads[1] = std::thread(&DB::compactor, this, std::ref(run_compactor[1]), std::ref(start_compactor[1]), std::ref(start_compactor[2]), std::ref(compactor_locks[1]), std::ref(compactor_locks[2]), 1, 3, filter_size);
+		compactor_threads[1] = std::thread(&DB::compactor, this, std::ref(run_compactor[1]), std::ref(start_compactor[1]), std::ref(start_compactor[2]), std::ref(compactor_locks[1]), std::ref(compactor_locks[2]), 1, 2, filter_size);
 		filter_size *= COMPACTION_TRIGGER * COMPACTION_TRIGGER;
-		compactor_threads[2] = std::thread(&DB::compactor, this, std::ref(run_compactor[2]), std::ref(start_compactor[2]), std::ref(start_compactor[3]), std::ref(compactor_locks[2]), std::ref(compactor_locks[3]), 3, MAX_LEVEL, filter_size);
+		compactor_threads[2] = std::thread(&DB::compactor, this, std::ref(run_compactor[2]), std::ref(start_compactor[2]), std::ref(start_compactor[3]), std::ref(compactor_locks[2]), std::ref(compactor_locks[3]), 2, MAX_LEVEL, filter_size);
 
 		flush_thread = std::thread(&DB::memtableFlush, this);
 
